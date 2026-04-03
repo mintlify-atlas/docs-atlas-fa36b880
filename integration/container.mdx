@@ -1,0 +1,119 @@
+---
+title: "Container profiling"
+description: "Profile Java applications running inside Docker or LXC containers, from within the container or from the host."
+---
+
+## Overview
+
+async-profiler can profile Java processes running inside Docker or LXC containers in two
+ways: from within the container itself, or from the host system targeting the containerized
+process.
+
+## Finding the target PID
+
+When profiling from the host, use the **host namespace PID**, not the PID visible inside
+the container. Find it with either of these commands:
+
+```bash
+# list all Java processes visible from the host
+ps aux | grep java
+
+# list processes in a specific container
+docker top <container-name>
+```
+
+## Profiling from the host
+
+Run `asprof` from the host as a privileged user. async-profiler automatically switches to
+the correct `pid` and `mount` namespace and adjusts user credentials to match the target
+process:
+
+```bash
+sudo asprof -e cpu -f /tmp/profile.jfr <host-pid>
+```
+
+The container must be able to access `libasyncProfiler.so` at the same absolute path as
+on the host. If this is not possible, use `--libpath` to specify the path to the library
+inside the container:
+
+```bash
+sudo asprof --libpath /path/in/container/libasyncProfiler.so -e cpu -f /tmp/profile.jfr <host-pid>
+```
+
+<Warning>
+  Do not expose the profiler HTTP server (`server=ADDRESS` agent option) publicly in
+  containerized environments. The server has no authentication and allows anyone who can
+  reach the port to start or stop profiling and retrieve output files.
+</Warning>
+
+## Handling `perf_event_open` restrictions
+
+By default, Docker's seccomp profile blocks the `perf_event_open` syscall that
+async-profiler uses for CPU and other hardware event sampling. There are three approaches
+to work around this restriction:
+
+<Tabs>
+  <Tab title="Modify seccomp profile">
+    Disable or customize the Docker seccomp profile to allow `perf_event_open`. This is
+    the most permissive approach and gives full access to kernel profiling features.
+
+    ```bash
+    docker run --security-opt seccomp=unconfined --cap-add SYS_ADMIN \
+      -v /path/to/libasyncProfiler.so:/opt/async-profiler/libasyncProfiler.so \
+      my-java-app
+    ```
+
+    You can also supply a customized seccomp JSON profile that allows only `perf_event_open`
+    rather than disabling seccomp entirely. See the
+    [Docker seccomp documentation](https://docs.docker.com/engine/security/seccomp/) for
+    instructions.
+
+    **Best for:** development environments where security constraints are relaxed.
+  </Tab>
+  <Tab title="fdtransfer (recommended for production)">
+    The `--fdtransfer` option lets a privileged `asprof` process on the host open
+    `perf_event` file descriptors and transfer them into the unprivileged container process.
+    The containerized JVM can then use the file descriptors without needing `perf_event_open`
+    permissions itself.
+
+    Run `asprof` on the host with elevated privileges and the `--fdtransfer` flag:
+
+    ```bash
+    sudo asprof --fdtransfer -e cpu -f /tmp/profile.jfr <host-pid>
+    ```
+
+    This allows full CPU profiling with kernel stack traces while the container process
+    remains unprivileged.
+
+    **Best for:** production environments where the container must remain locked down.
+  </Tab>
+  <Tab title="ctimer fallback">
+    Fall back to the `-e ctimer` profiling mode, which uses a POSIX timer instead of
+    `perf_event_open`. This works without any special privileges or seccomp modifications.
+
+    ```bash
+    asprof -e ctimer -f /tmp/profile.jfr <pid>
+    ```
+
+    The trade-off is that `ctimer` mode does not capture kernel-level stack frames, so
+    profiling is limited to user-space stacks.
+
+    **Best for:** situations where neither seccomp changes nor `fdtransfer` are feasible,
+    or when kernel stacks are not needed.
+  </Tab>
+</Tabs>
+
+## Recommended setups
+
+| Environment | Recommended approach |
+|-------------|----------------------|
+| Local development | Disable seccomp (`--security-opt seccomp=unconfined --cap-add SYS_ADMIN`) |
+| CI / staging | `--fdtransfer` with a privileged sidecar or host process |
+| Production (locked down) | `--fdtransfer` or `-e ctimer` fallback |
+
+## Profiling from inside the container
+
+If you control the container image, you can profile directly from within the container
+by copying `libasyncProfiler.so` into the image and running `asprof` against the local JVM
+process. In this case standard `perf_event_open` restrictions still apply, and you still
+need one of the three approaches above to enable kernel-level profiling.

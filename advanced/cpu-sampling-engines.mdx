@@ -1,0 +1,121 @@
+---
+title: "CPU Sampling Engines"
+description: "How async-profiler's three CPU sampling engines work and when to use each one."
+---
+
+Async-profiler provides three CPU profiling engines: `cpu`, `itimer`, and `ctimer`. Each makes different trade-offs around accuracy, kernel visibility, container compatibility, and resource usage.
+
+## Engines
+
+### cpu (perf_events)
+
+The `cpu` engine uses Linux [perf_events](https://man7.org/linux/man-pages/man2/perf_event_open.2.html). One `perf_event` descriptor is created per running thread, configured to deliver a signal every N nanoseconds of CPU time. This is the most accurate CPU sampler in async-profiler and the only one that can collect kernel stack traces.
+
+**How sample counts work:** if an application uses 2 CPU cores each at 30% utilization and the interval is 10ms, the profiler collects approximately `2 × 0.3 × 100 = 60` samples per second. Each sample represents one CPU core running for N nanoseconds.
+
+**Restrictions:**
+
+- OS configuration may restrict access to `perf_events`, for example via `kernel.perf_event_paranoid` sysctl or seccomp (common in Docker containers). If `perf_events` are available but kernel symbols are hidden (e.g. by `kernel.kptr_restrict`), async-profiler continues using `perf_events`, emits a warning, and omits kernel stack traces.
+- The engine allocates one file descriptor per thread. If the application has many threads and `ulimit -n` is too low, the process may run out of file descriptors. The fix is to increase the file descriptor limit.
+
+**Auto-fallback:** when you specify `-e cpu` and `perf_events` are unavailable, async-profiler transparently falls back to `ctimer` mode. To force user-space-only `perf_events` profiling without fallback, use `-e cpu-clock --all-user`.
+
+```bash
+asprof -e cpu -i 5ms <pid>
+```
+
+### itimer
+
+The `itimer` engine uses [setitimer(ITIMER_PROF)](https://man7.org/linux/man-pages/man2/setitimer.2.html), which ideally generates a signal every given interval of CPU time consumed by the process as a whole.
+
+**Limitations:**
+
+- Only one `itimer` signal can be delivered to a process at a time.
+- Signals are not distributed evenly between running threads.
+- Sampling resolution is limited by the [jiffy](https://man7.org/linux/man-pages/man7/time.7.html) size.
+- Profiles may be less accurate on macOS, where `itimer` signals are often biased towards system calls.
+
+**Advantages:** works in containers without any special configuration and does not consume file descriptors.
+
+```bash
+asprof -e itimer -i 10ms <pid>
+```
+
+### ctimer
+
+The `ctimer` engine is a Linux-specific alternative to `cpu` that avoids `perf_events` restrictions. It uses [timer_create](https://man7.org/linux/man-pages/man2/timer_create.2.html) to deliver per-thread signals, combining the per-thread accuracy of `cpu` with the container compatibility of `itimer`.
+
+**Limitations:**
+
+- Cannot collect kernel stack traces.
+- Resolution is limited by the jiffy size (`HZ` constant). With `HZ=100`, the minimum supported interval is 10ms; with `HZ=250`, it is 4ms.
+- Linux only; not available on macOS.
+
+```bash
+asprof -e ctimer -i 10ms <pid>
+```
+
+## Comparison
+
+| Attribute | cpu (perf_events) | itimer | ctimer |
+| --- | :---: | :---: | :---: |
+| Can collect kernel stack traces | ✅ | ❌ | ❌ |
+| High resolution | ✅ | ❌ | ❌ |
+| Accuracy / fairness | ✅ | ❌ | 🆗 |
+| Works in containers by default | ❌ | ✅ | ✅ |
+| Does not consume file descriptors | ❌ | ✅ | ✅ |
+| macOS support | ❌ | ✅ | ❌ |
+
+## Choosing an engine
+
+<AccordionGroup>
+  <Accordion title="Production Linux with sufficient permissions">
+
+Use `cpu` (perf_events). It is the most accurate engine and the only one that shows kernel stack traces.
+
+```bash
+asprof -e cpu -f profile.jfr <pid>
+```
+
+  </Accordion>
+
+  <Accordion title="Container without elevated privileges">
+
+Use `ctimer` (preferred) or `itimer`. Both work without special permissions and do not consume file descriptors.
+
+```bash
+asprof -e ctimer -f profile.jfr <pid>
+```
+
+If `ctimer` is unavailable, fall back to `itimer`:
+
+```bash
+asprof -e itimer -f profile.jfr <pid>
+```
+
+  </Accordion>
+
+  <Accordion title="macOS">
+
+Use `itimer`. It is the only CPU engine supported on macOS.
+
+```bash
+asprof -e itimer -f profile.jfr <pid>
+```
+
+  </Accordion>
+
+  <Accordion title="Force user-space-only perf_events">
+
+To use `perf_events` for user-space profiling only (bypassing the automatic fallback to `ctimer`):
+
+```bash
+asprof -e cpu-clock --all-user -f profile.jfr <pid>
+```
+
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+The actual profiling engine used (`perf_events`, `ctimer`, etc.) is recorded in the JFR output, so you can always verify which engine was active after the fact.
+</Note>

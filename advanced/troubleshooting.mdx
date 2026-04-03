@@ -1,0 +1,263 @@
+---
+title: "Troubleshooting"
+description: "Error messages, known limitations, and fixes for common async-profiler issues."
+---
+
+## Error messages
+
+<AccordionGroup>
+  <Accordion title="perf_event mmap failed: Operation not permitted">
+
+The profiler allocates an 8 kB `perf_event` buffer per thread of the target process. This error appears when the total buffer size (`8 × threads` kB) exceeds the locked memory limit.
+
+**How the limit is calculated:**
+
+The limit is `ulimit -l` plus `kernel.perf_event_mlock_kb × CPU_cores`. For example, on a 16-core machine with `ulimit -l 65536` and `kernel.perf_event_mlock_kb=516`:
+
+```
+(65536 + 516 × 16) / 8 = 9224 threads
+```
+
+If the application has more threads than this, increase one of these limits:
+
+```bash
+# Increase locked memory limit for the current session
+ulimit -l 131072
+
+# Or increase the kernel sysctl
+sysctl -w kernel.perf_event_mlock_kb=1024
+```
+
+When the limit is exceeded, native stack traces are not collected for some threads but profiling otherwise continues.
+
+<Note>
+A process running as root is not subject to the locked memory limit.
+</Note>
+
+  </Accordion>
+
+  <Accordion title="Failed to change credentials to match the target process">
+
+HotSpot's Dynamic Attach mechanism requires the profiler to run as exactly the same user and group as the target JVM process. If they differ, async-profiler attempts to switch credentials automatically. This succeeds for `root` but not for other users.
+
+**Fix:** run `asprof` as the same user that owns the JVM process:
+
+```bash
+sudo -u <jvm-user> asprof <pid>
+```
+
+Or run as root, which can attach to any process.
+
+  </Accordion>
+
+  <Accordion title="Could not start attach mechanism: No such file or directory">
+
+The profiler cannot reach the target JVM through its UNIX domain socket (`/tmp/.java_pidNNN`). There are several possible causes:
+
+<Steps>
+  <Step title="Check if the socket file was deleted">
+    Some systems automatically clean `/tmp`. Run the following to see if the socket exists in the process's file descriptors but not on disk:
+
+    ```bash
+    lsof -p <pid> | grep java_pid
+    ```
+
+    If a socket is listed but the file does not exist on the filesystem, the cleanup script has deleted it. Configure the cleanup software to exclude `.java_pid*` files.
+  </Step>
+
+  <Step title="Check if attach is disabled">
+    The JVM may have been started with `-XX:+DisableAttachMechanism`. Check the JVM startup flags:
+
+    ```bash
+    jcmd <pid> VM.flags
+    ```
+
+    If this flag is set, restart the JVM without it.
+  </Step>
+
+  <Step title="Check for container or chroot /tmp mismatch">
+    If the Java process runs inside a container or chroot, its `/tmp` may not be the same directory as the host's `/tmp`. `asprof` attempts to resolve this automatically, but may lack the required permissions. Trace the system calls to diagnose:
+
+    ```bash
+    strace asprof <pid> jcmd
+    ```
+
+  </Step>
+
+  <Step title="Check if the JVM is stuck at a safepoint">
+    If the JVM is busy and cannot reach a safepoint (e.g., during a long garbage collection), it cannot respond to attach requests. Send `SIGQUIT` to get a thread dump:
+
+    ```bash
+    kill -3 <pid>
+    ```
+
+    A healthy JVM prints a thread dump and heap summary to its console output. If there is no output, the JVM may be hung.
+  </Step>
+</Steps>
+
+  </Accordion>
+
+  <Accordion title="Target JVM failed to load libasyncProfiler.so">
+
+The connection to the JVM was established, but the JVM process cannot load the profiler shared library. The JVM loads the library by its absolute path, so the JVM process user must have read access to that exact path.
+
+**Fix:** ensure the file is readable by the JVM process user:
+
+```bash
+chmod a+r /path/to/libasyncProfiler.so
+```
+
+Or copy the library to a location accessible by the JVM user.
+
+  </Accordion>
+
+  <Accordion title="Perf events unavailable">
+
+The `perf_event_open()` syscall failed. Common reasons:
+
+1. `/proc/sys/kernel/perf_event_paranoid` is set to restricted mode (value ≥ 2).
+2. seccomp disables `perf_event_open` inside a container.
+3. The OS is running under a hypervisor that does not virtualize performance counters.
+4. `perf_event_open` is not supported on this system (e.g. WSL).
+
+**For permission-related causes (1 and 2):** use `--fdtransfer` while running the profiler as a privileged user. This starts a background process that passes `perf_event` file descriptors to the unprivileged profiler:
+
+```bash
+sudo asprof --fdtransfer -e cpu -f profile.jfr <pid>
+```
+
+**If changing permissions is not possible:** fall back to `ctimer`, which does not require `perf_events`. Kernel stack traces will not be available:
+
+```bash
+asprof -e ctimer -f profile.jfr <pid>
+```
+
+  </Accordion>
+
+  <Accordion title="No AllocTracer symbols found. Are JDK debug symbols installed?">
+
+Allocation profiling for applications running on JDK versions prior to 11 requires OpenJDK debug symbols.
+
+**Fix:** install the debug symbols package for your JDK. After installation, if the error persists, the JDK may have been upgraded during the install. Any Java processes that started before the installation loaded the old JDK version and will continue to show this error until restarted:
+
+```bash
+# Restart the affected Java process, then retry
+asprof -e alloc -f profile.jfr <pid>
+```
+
+  </Accordion>
+
+  <Accordion title="VMStructs unavailable. Unsupported JVM?">
+
+The JVM shared library does not export `gHotSpotVMStructs*` symbols. This indicates one of:
+
+- The JVM is not a HotSpot JVM (e.g. it is OpenJ9 or another implementation).
+- The JDK was built incorrectly and is missing the required symbols.
+
+**Fix for incorrectly built JDKs:** installing JDK debug symbols may resolve the issue. If this is a non-HotSpot JVM, `vm` and `vmx` stack walking modes are unavailable; use `--cstack fp` or `--cstack dwarf` instead.
+
+  </Accordion>
+
+  <Accordion title="Could not parse symbols from &lt;libname.so&gt;">
+
+Async-profiler could not parse native function names because `/proc/[pid]/maps` contains corrupted data. This is a known OS bug affecting Ubuntu containers running on Linux kernel 5.x.
+
+**Reference:** [Ubuntu bug #1843018](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/1843018)
+
+**Workaround:** update the host kernel to a version where the bug is fixed, or use a base image that is not affected.
+
+  </Accordion>
+
+  <Accordion title="Could not open output file">
+
+The output file is written by the target JVM process, not by the `asprof` script itself. This means the path must be accessible to the JVM process's user and from the JVM process's working directory or mount namespace.
+
+**Fix:** specify a path that the JVM process user can write to:
+
+```bash
+# Use an absolute path in a world-writable directory
+asprof -f /tmp/profile.jfr <pid>
+```
+
+If the JVM is inside a container, the path must exist inside the container's filesystem, not only on the host.
+
+  </Accordion>
+</AccordionGroup>
+
+## Known limitations
+
+<AccordionGroup>
+  <Accordion title="MaxJavaStackTraceDepth=0 disables Java stack collection">
+
+If the JVM is started with `-XX:MaxJavaStackTraceDepth=0` (or any negative value), Java stack traces are not collected. The exception is `--cstack vm` mode, which walks the stack using JVM internal structures and is not affected by this flag.
+
+**Fix:** either remove `-XX:MaxJavaStackTraceDepth=0` from JVM startup flags, or switch to `--cstack vm` (the default since async-profiler 4.2).
+
+  </Accordion>
+
+  <Accordion title="Short profiling intervals can interrupt system calls">
+
+A very short profiling interval may cause repeated signal delivery during long-running system calls like `clone()`, preventing them from completing. This manifests as threads appearing stuck or operations that normally complete quickly hanging indefinitely.
+
+**Fix:** increase the profiling interval. For most workloads, 1ms to 10ms is sufficient:
+
+```bash
+asprof -e cpu -i 10ms -f profile.jfr <pid>
+```
+
+See [issue #97](https://github.com/async-profiler/async-profiler/issues/97) for background.
+
+  </Accordion>
+
+  <Accordion title="Inlined methods may not appear when attaching at runtime">
+
+When async-profiler is not loaded at JVM startup (via `-agentpath`), it is strongly recommended to add these JVM flags:
+
+```bash
+-XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints
+```
+
+Without `-XX:+DebugNonSafepoints`, inlined methods have a high probability of not appearing in profiles, because the JVM does not maintain debug information for them between safepoints.
+
+When attaching at runtime, the `CompiledMethodLoad` JVMTI event enables debug info for methods compiled after the agent attaches, but methods compiled before attachment remain affected.
+
+  </Accordion>
+
+  <Accordion title="perf_events stack depth limited to 127 frames">
+
+On most Linux systems, `perf_events` captures call stacks to a maximum depth of 127 frames. Stacks deeper than this are silently truncated.
+
+On recent Linux kernels, this limit can be increased:
+
+```bash
+# Check current limit
+cat /proc/sys/kernel/perf_event_max_stack
+
+# Increase the limit
+sysctl -w kernel.perf_event_max_stack=512
+```
+
+Alternatively, use `--cstack vm` which has its own configurable depth via `-j N`.
+
+  </Accordion>
+
+  <Accordion title="Non-Java frames preceding Java frames are not shown by default">
+
+When native code calls into Java (for example, `start_thread` → `JavaMain` → your Java code), async-profiler does not show the native frames that precede the first Java frame unless `--cstack vmx` is specified.
+
+Native frames *called by* Java code are shown normally. Only the frames that lead up to Java entry points are omitted in standard mode.
+
+**Fix:** use `--cstack vmx` to get fully interleaved native and Java frames:
+
+```bash
+asprof --cstack vmx -f profile.jfr <pid>
+```
+
+  </Accordion>
+
+  <Accordion title="macOS profiling is limited to user space">
+
+On macOS, async-profiler can only profile user-space code. Kernel stack traces are not available regardless of configuration.
+
+  </Accordion>
+</AccordionGroup>

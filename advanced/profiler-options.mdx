@@ -1,0 +1,140 @@
+---
+title: "Profiler Options"
+description: "Complete reference for all asprof command-line flags and agent options."
+---
+
+## Usage
+
+```bash
+asprof [action] [options] [PID]
+```
+
+## Actions
+
+These actions apply to both the `asprof` binary and when launching as an agent.
+
+| Action | Description |
+| --- | --- |
+| `start` | Start profiling in semi-automatic mode, i.e. the profiler will run until `stop` is explicitly called. |
+| `resume` | Start or resume an earlier profiling session that has been stopped. All collected data remains valid. Profiling options are not preserved between sessions and should be specified again. |
+| `stop` | Stop profiling and print the report. |
+| `dump` | Dump collected data without stopping the profiling session. |
+| `status` | Print profiling status: whether the profiler is active and for how long. |
+| `metrics` | Print profiler metrics in Prometheus format. |
+| `list` | Show the list of profiling events available for the target process specified with PID. |
+
+## Options
+
+<AccordionGroup>
+  <Accordion title="General options">
+
+| asprof | Agent | Description |
+| --- | --- | --- |
+| `-o fmt` | `fmt` | Specifies what information to dump when profiling ends. See the [Dump format reference](#dump-format-reference) below. |
+| `-f FILENAME` | `file=FILENAME` | Output file for profile data. Supports placeholders: `%p` (PID of target JVM), `%t` (timestamp), `%n{MAX}` (sequence number), `%{ENV}` (value of the given environment variable). Example: `asprof -o collapsed -f /tmp/traces-%t.txt 8983` |
+| `-d N` | N/A | Duration shortcut (asprof only). Equivalent to: start → sleep N seconds → stop. If no action is given, the profiler runs for N seconds and stops automatically. Example: `asprof -d 30 <pid>` |
+| `--timeout N` | `timeout=N` | Profiling duration in seconds. The profiler stops automatically after the specified time. Example: `java -agentpath:/path/to/libasyncProfiler.so=start,event=cpu,timeout=30,file=profile.html <app>` |
+| `--loop TIME` | `loop=TIME` | Run profiler in a loop (continuous profiling). Argument is a clock time (`hh:mm:ss`) or duration in `s`econds, `m`inutes, `h`ours, or `d`ays. Use a timestamp pattern in the filename to avoid overwriting. Example: `asprof --loop 1h -f /var/log/profile-%t.jfr 8983` |
+| `-e EVENT` / `--event EVENT` | `event=EVENT` | Profiling event: `cpu`, `alloc`, `nativemem`, `lock`, `cache-misses`, etc. Use `list` to see all available events. |
+| `-i N` / `--interval N` | `interval=N` | Sampling interval. For CPU profiling: CPU time in nanoseconds. For wall-clock: wall time. For method/native profiling: number of calls. For PMU: number of events. Time intervals accept suffixes: `s`, `ms`, `us`, `ns`. Example: `asprof -e cpu -i 5ms 8983` |
+| `--alloc N` | `alloc=N` | Allocation profiling interval in bytes. Accepts `k`, `m`, `g` suffixes. |
+| `--tlab` | `tlab` | Use TLAB events for allocation profiling. |
+| `--live` | `live` | Retain only allocation samples with live objects (not yet collected by GC). Useful for heap memory leak detection. |
+| `--nativemem N` | `nativemem=N` | Native memory allocation profiling. N is the interval in bytes (accepts `k`, `m`, `g` suffixes). Default is 0. |
+| `--nofree` | `nofree` | Do not record `free()` calls in native memory profiling. Useful when tracking memory leaks is not a concern and there are many free calls. |
+| `--trace METHOD[:T]` | `trace=METHOD[:T]` | Java method to trace, optionally followed by a latency threshold. Example: `--trace my.pkg.Class.Method:50ms`. Latency threshold defaults to 0 (all calls). Can be specified multiple times. |
+| `--lock TIME` | `lock=TIME` | In lock profiling mode, sample contended locks when the total lock wait time exceeds the threshold. |
+| `--nativelock TIME` | `nativelock=TIME` | In native lock profiling mode, sample contended pthread locks (mutex/rwlock) when total lock wait time exceeds the threshold. |
+| `--wall INTERVAL` | `wall=INTERVAL` | Wall-clock profiling interval. Use instead of `-e wall` to enable wall-clock profiling alongside another event, typically `cpu`. Example: `asprof -e cpu --wall 100ms -f combined.jfr 8983` |
+| `--nobatch` | `nobatch` | Disable wall-clock profiling batching optimization. Emits one `jdk.ExecutionSample` event per wall-clock sample instead of batching into `profiler.WallClockSample`. |
+| `-j N` | `jstackdepth=N` | Maximum stack depth. Default is 2048. Accepts two numbers separated by `/` (e.g. `200/40`): stack traces deeper than 200 frames are truncated to the top 40. Useful for deep recursion. Example: `asprof -j 30 8983` |
+| `-F features` | `features=LIST` | Comma-separated (or `+`-separated for agents) list of stack walking features: `stats`, `vtable`, `comptask`, `pcaddr`. See [Advanced Stacktrace Features](/advanced/advanced-stacktrace-features). |
+| `-L level` | `loglevel=level` | Log level: `debug`, `info`, `warn`, `error`, or `none`. |
+| `--all-user` | `alluser` | Include only user-mode events. Useful when kernel profiling is restricted by `perf_event_paranoid`. |
+| `--sched` | `sched` | Group threads by Linux scheduling policy: BATCH / IDLE / OTHER. |
+| `--cstack MODE` | `cstack=MODE` | Native stack (C stack) walking mode: `fp` (frame pointer), `dwarf` (DWARF unwind info), `vm`, `vmx` (HotSpot VM structs), `no` (skip native stack). See [Stack Walking Modes](/advanced/stack-walking-modes). |
+| `--signal NUM` | `signal=NUM` | Use an alternative signal for CPU or wall-clock profiling. To change both signals, separate with `/`: `--signal SIGCPU/SIGWALL`. |
+| `--clock SOURCE` | `clock=SOURCE` | Clock source for JFR timestamps: `tsc` (default) or `monotonic` (`CLOCK_MONOTONIC`). |
+| `--begin function` | `begin=FUNCTION` | Automatically start profiling when the specified native function is executed. |
+| `--end function` | `end=FUNCTION` | Automatically stop profiling when the specified native function is executed. |
+| `--ttsp` | `ttsp` | Time-to-safepoint profiling. Alias for `--begin SafepointSynchronize::begin --end RuntimeService::record_safepoint_synchronized`. Records events only between the safepoint request and the start of the VM operation. |
+| `--nostop` | `nostop` | Record profiling windows between `--begin` and `--end`, but do not stop profiling outside those windows. |
+| `--memlimit SIZE` | `memlimit=SIZE` | Limit memory used by call trace storage. Once exceeded, no new stack traces are recorded. Minimum is 10 MB; default is unlimited. Example: `asprof -e cpu --memlimit 128m` |
+| `--libpath PATH` | N/A | Full path to `libasyncProfiler.so`. Useful when profiling a container from the host. |
+| `--filter FILTER` | `filter=FILTER` | In wall-clock profiling mode, profile only threads with the specified IDs. Example: `asprof -e wall -d 30 --filter 120-127,132,134 Computey` |
+| `--fdtransfer` | `fdtransfer` | Run a background process that provides access to `perf_events` for an unprivileged process. Useful for profiling a containerized process from the host. |
+| `--target-cpu` | `target-cpu` | In `perf_events` mode, sample only threads running on the specified CPU (defaults to -1, all CPUs). Example: `asprof --target-cpu 3` |
+| `--record-cpu` | `record-cpu` | In `perf_events` mode, record which CPU each sample was taken on. |
+| `-v` / `--version` | `version` | Print the profiler library version. With a PID, gets the version loaded into the given process. |
+
+  </Accordion>
+
+  <Accordion title="JFR-only options">
+
+These options apply only when using JFR (`-o jfr`) output format.
+
+| asprof | Agent | Description |
+| --- | --- | --- |
+| `--chunksize N` | `chunksize=N` | Approximate size per JFR chunk. A new chunk starts when this size is reached. Default is 100 MB. Example: `asprof -f profile.jfr --chunksize 100m 8983` |
+| `--chunktime N` | `chunktime=N` | Approximate time limit per JFR chunk. A new chunk starts when the time limit is reached. Default is 1 hour. Example: `asprof -f profile.jfr --chunktime 1h 8983` |
+| `--jfropts OPTIONS` | `jfropts=OPTIONS` | Comma-separated JFR recording options. Currently supports `mem` (Linux 3.17+): accumulates events in memory instead of flushing synchronously to disk. |
+| `--jfrsync CONFIG` | `jfrsync[=CONFIG]` | Start Java Flight Recording synchronously with the profiler. The output `.jfr` file includes all regular JFR events with execution samples from async-profiler. Implies `-o jfr`. `CONFIG` is a predefined JFR profile, a `.jfc` file, or a list of JFR events prefixed with `+`. Example: `asprof -e cpu --jfrsync profile -f combined.jfr 8983` |
+| `--proc INTERVAL` | `proc=INTERVAL` | Collect statistics about other processes in the system. Default sampling interval is 30s. |
+| `--all` | `all` | Shorthand to enable `cpu`, `wall`, `alloc`, `live`, `lock`, `nativelock`, `nativemem`, and `proc` profiling simultaneously. Can be combined with `--alloc`, `--lock`, etc. for custom intervals. Not recommended for production, especially for continuous profiling. |
+
+  </Accordion>
+
+  <Accordion title="Flame graph and tree view options">
+
+These options apply to `flamegraph` and `tree` output formats.
+
+| asprof | Agent | Description |
+| --- | --- | --- |
+| `--title TITLE` | `title=TITLE` | Custom title for the flame graph. Example: `asprof -f profile.html --title "Sample CPU profile" 8983` |
+| `--minwidth PERCENT` | `minwidth=PERCENT` | Minimum frame width as a percentage. Frames narrower than this are not shown. Example: `asprof -f profile.html --minwidth 0.5 8983` |
+| `--reverse` | `reverse` | Reverse stack traces (produces an icicle graph by default). Example: `asprof -f profile.html --reverse 8983` |
+| `--inverted` | `inverted` | Toggles the layout: for reversed traces, switches from icicle to flame graph; for default traces, switches from flame graph to icicle. Example: `asprof -f profile.html --inverted 8983` |
+
+<Note>
+`--reverse` and `--inverted` are independent settings. By default, flame graphs grow bottom-to-top with outermost frames at the bottom. `--reverse` merges from the innermost (leaf) frames instead. `--inverted` flips the visual layout. The layout can also be toggled interactively with the **Invert** button in the generated HTML page.
+</Note>
+
+  </Accordion>
+
+  <Accordion title="Non-JFR output options">
+
+These options apply to all output formats except JFR.
+
+| asprof | Agent | Description |
+| --- | --- | --- |
+| `-t` / `--threads` | `threads` | Profile threads separately. Each stack trace ends with a frame identifying the thread. Example: `asprof -t 8983` |
+| `-s` / `--simple` | `simple` | Print simple class names instead of fully qualified names. |
+| `-n` / `--norm` | `norm` | Normalize names of hidden classes and lambdas. |
+| `-g` / `--sig` | `sig` | Print method signatures. |
+| `-a` / `--ann` | `ann` | Annotate frames: JIT compiled (`_[j]`), inlined (`_[i]`), interpreted (`_[0]`), C1 compiled (`_[1]`). Flame graph and tree views color frames by type regardless of this option. |
+| `-l` / `--lib` | `lib` | Prepend library names to symbols, e.g. `` `libjvm.so`JVM_DefineClassWithSource ``. |
+| `--dot` | `dot` | Use dotted class names, e.g. `java.lang.String` instead of `java/lang/String`. |
+| `--samples` | `samples` | Count the number of samples. This is the default aggregation. |
+| `--total` | `total` | Count the total value of the collected metric, e.g. total allocation size, instead of sample count. |
+| `-I PATTERN` | `include=PATTERN` | Include only stack traces containing the given pattern. Can be specified multiple times. Supports leading/trailing `*` wildcards. Example: `asprof -I 'Primes.*' -I 'java/*' 8983` |
+| `-X PATTERN` | `exclude=PATTERN` | Exclude stack traces containing the given pattern. Can be specified multiple times. Supports leading/trailing `*` wildcards. Example: `asprof -X '*Unsafe.park*' 8983` |
+| N/A | `mcache[=AGE]` | Maximum age of the method name cache. Default is `0` (do not cache method names between profiling sessions). Agent option only. |
+
+  </Accordion>
+</AccordionGroup>
+
+## Dump format reference
+
+The `-o fmt` option controls what is dumped when profiling ends.
+
+| Format | Description |
+| --- | --- |
+| `traces[=N]` | Dump call traces (at most N samples). |
+| `flat[=N]` | Dump flat profile showing the top N hot methods. Can be combined with `traces`, e.g. `traces=200,flat=200`. |
+| `jfr` | Dump events in JDK Flight Recorder format, readable by JDK Mission Control. |
+| `collapsed` | Dump collapsed call traces in the format used by the [FlameGraph](https://github.com/brendangregg/FlameGraph) script. Each line is a semicolon-separated list of frames followed by a counter. |
+| `flamegraph` | Produce a flame graph in HTML format. |
+| `tree` | Produce a call tree in HTML format. Use `--reverse` to generate a backtrace view. |
+| `otlp` | Dump events in OpenTelemetry format. |
+
+Multiple dump formats can be specified at the same time.

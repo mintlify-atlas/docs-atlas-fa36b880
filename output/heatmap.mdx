@@ -1,0 +1,121 @@
+---
+title: "Heatmap"
+description: "Visualize 24-hour continuous profiles as an interactive timeline heatmap to detect transient anomalies that flame graphs cannot show."
+---
+
+Flame graphs are excellent for identifying overall resource usage, but they aggregate all samples into a single view with no timeline. If a performance issue is intermittent — a spike every few minutes, a latency burst during a specific operation — a flame graph will hide it by averaging it into the background.
+
+async-profiler's heatmap format preserves the timestamp of every sample, giving you a two-dimensional timeline where you can locate anomalies visually and drill into any time interval with a single click.
+
+---
+
+## What a heatmap shows
+
+A heatmap is a grid of colored blocks. Each block represents a short period of wall-clock time, and the block's color intensity encodes how many profiling events occurred in that interval. The darker or more saturated the color, the more activity was recorded.
+
+This lets you see at a glance:
+
+- **Regular activity patterns**: predictable periodic bursts from GC, cron jobs, or request cycles.
+- **Anomalies**: unexpected spikes or gaps in activity that would be invisible in an aggregated flame graph.
+- **Idle periods**: stretches where the profiled process was doing very little.
+
+<Note>
+The heatmap idea was inspired by [FlameScope](https://github.com/Netflix/flamescope). async-profiler's implementation extends the concept to support 24-hour recordings at 20-millisecond granularity, and produces a self-contained HTML file that requires no server to view.
+</Note>
+
+---
+
+## Scale and zoom
+
+The heatmap offers three zoom levels to balance overview and detail:
+
+| Scale | Each vertical line | Each square |
+|---|---|---|
+| Largest (overview) | 5 minutes | 5 seconds |
+| Medium | — | — |
+| Finest (detail) | — | 20 milliseconds |
+
+Switch between scales to move from a whole-day overview down to sub-second resolution for a specific incident.
+
+---
+
+## Interactive features
+
+### Click a square for an instant flame graph
+
+Click any block in the heatmap to generate a flame graph for that exact time interval. This lets you immediately see what the application was doing during a spike without re-running the profiler.
+
+### Click and drag for a custom time range
+
+Hold the mouse button and drag across multiple blocks to select an arbitrary time range. async-profiler builds a flame graph covering the entire selected period automatically.
+
+### Ctrl+click for a differential flame graph
+
+<Steps>
+  <Step title="Select a target range">
+    Click and drag to select the time interval you want to analyze (for example, a spike you spotted).
+  </Step>
+  <Step title="Select a baseline range">
+    Hold **Ctrl** and move the mouse to another time range that will serve as the baseline (for example, a quiet period before the spike).
+  </Step>
+  <Step title="Inspect the differential flame graph">
+    async-profiler generates a differential flame graph comparing the two intervals. Frames that were sampled more in the target range are highlighted in red; frames sampled less are highlighted in blue.
+  </Step>
+</Steps>
+
+### Search with Ctrl+F
+
+Press **Ctrl+F** and enter a regex pattern to search across the entire heatmap. Time intervals containing matching stack frames are highlighted in blue on the timeline. Matching frames, if any, are also highlighted in the current flame graph.
+
+Press **Ctrl+Shift+F** to do the same search but filter the flame graph to show only stacks that contain matching frames — all other stacks are removed from the view.
+
+---
+
+## Efficiency and size
+
+Heatmaps use specialized compression algorithms optimized for profiling data. A 1 GB JFR recording typically compresses down to a 10–15 MB self-contained HTML file. A full 24-hour continuous profile fits on a single page that you can share by email or store in a ticket.
+
+---
+
+## Generating a heatmap
+
+Heatmaps can only be generated from JFR recordings. Use `jfrconv` with the `-o heatmap` option:
+
+```bash
+jfrconv --cpu -o heatmap profiler.jfr heatmap-cpu.html
+```
+
+All standard `jfrconv` filter options apply:
+
+```bash
+# Allocation heatmap for a specific time window
+jfrconv --alloc --from "14:00:00" --to "15:00:00" -o heatmap profiler.jfr heatmap-alloc.html
+
+# Wall-clock heatmap with simple class names
+jfrconv --wall --simple -o heatmap profiler.jfr heatmap-wall.html
+```
+
+<Tip>
+Profile in JFR mode with `asprof -o jfr` during an incident or overnight, then generate heatmaps for CPU, allocation, and wall-clock from the same recording to compare timelines across event types.
+</Tip>
+
+See [Converter usage](/output/converter-usage) for the full list of `jfrconv` options.
+
+---
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="Converter usage" icon="arrows-rotate" href="/output/converter-usage">
+    Full reference for `jfrconv`, including all filter and output options.
+  </Card>
+  <Card title="JFR visualization" icon="magnifying-glass-chart" href="/output/jfr-visualization">
+    Other tools for viewing JFR recordings: JMC, IntelliJ IDEA, and jfr CLI.
+  </Card>
+  <Card title="Flame graph interpretation" icon="fire" href="/output/flamegraph-interpretation">
+    How to read the flame graphs that heatmap drill-downs generate.
+  </Card>
+  <Card title="Output formats" icon="file-export" href="/output/formats">
+    All formats async-profiler can write and when to use each.
+  </Card>
+</CardGroup>

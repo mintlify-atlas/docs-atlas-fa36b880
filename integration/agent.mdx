@@ -1,0 +1,96 @@
+---
+title: "JVM agent"
+description: "Launch async-profiler as a JVM agent to profile code from startup or run continuous profiling."
+---
+
+## Why use agent mode
+
+Attaching async-profiler via `asprof` requires the JVM to already be running and past its
+initialization phase. Agent mode solves two problems that `asprof` cannot:
+
+- **Profile from JVM startup** — capture allocations, CPU samples, and other events that
+  occur during static initializers, framework bootstrap, and early application startup before
+  a dynamic attach would be possible.
+- **Continuous profiling** — use the `loop` option to automatically rotate output files on
+  a fixed interval for always-on profiling in production.
+
+## The `-agentpath` flag
+
+Pass the profiler library to the JVM with `-agentpath` and supply profiler options as the
+argument string:
+
+```bash
+java -agentpath:/path/to/libasyncProfiler.so=start,event=cpu,file=profile.html MyApp
+```
+
+On macOS, the library file is `libasyncProfiler.dylib` instead of `libasyncProfiler.so`.
+
+The argument string is a comma-separated list of profiler options in the form:
+
+```
+option[=value],option[=value]...
+```
+
+This is exactly the format that `asprof` constructs internally when it converts CLI arguments
+and attaches `libasyncProfiler.so` to a running process.
+
+<Note>
+  When attaching as an agent at JVM startup, `-XX:+DebugNonSafepoints` is automatically
+  enabled by the JVM. You do not need to add it manually when using agent mode.
+</Note>
+
+## Agent options
+
+The full set of profiler options is available in agent mode. The following options are
+particularly relevant when running as an agent:
+
+| Option | Description |
+|--------|-------------|
+| `file=FILENAME` | Path to the output file. Supports `%p` (PID), `%t` (timestamp), and other placeholders. |
+| `timeout=N` | Automatically stop profiling after `N` seconds. |
+| `loop=TIME` | Run profiling in a continuous loop, rotating output files on each interval (e.g., `loop=1h`). |
+| `server=ADDRESS` | Start an HTTP control server at `ADDRESS` (e.g., `server=8080`). |
+| `log=FILENAME` | Write profiler log messages to a dedicated file instead of stderr. |
+| `quiet` | Suppress the start and stop messages printed to stderr. |
+
+<Warning>
+  The `server` option starts an unauthenticated HTTP control server that can start and stop
+  profiling and read output files. Never expose this port publicly. Restrict access with a
+  firewall or bind to localhost only.
+</Warning>
+
+## Examples
+
+### CPU profiling with auto-stop
+
+Profile CPU activity from JVM startup and write a JFR file after 60 seconds:
+
+```bash
+java -agentpath:/path/to/libasyncProfiler.so=start,event=cpu,file=profile.jfr,timeout=60 MyApp
+```
+
+### Continuous profiling with file rotation
+
+Profile continuously and rotate output to a new JFR file every hour. The `%t` placeholder
+is replaced with a Unix timestamp so files do not overwrite each other:
+
+```bash
+java -agentpath:/path/to/libasyncProfiler.so=start,event=cpu,loop=1h,file=/tmp/profile-%t.jfr MyApp
+```
+
+### Allocation profiling from startup
+
+Capture allocation events from the very first object allocations, including those during
+framework initialization:
+
+```bash
+java -agentpath:/path/to/libasyncProfiler.so=start,event=alloc,file=alloc.jfr MyApp
+```
+
+## IntelliJ IDEA integration
+
+IntelliJ IDEA ships with async-profiler bundled. To configure it, open
+**Settings / Preferences > Build, Execution, Deployment > Java Profiler**.
+
+From there you can modify agent options for specific run configurations and enable
+**Collect native calls** to include non-Java threads and native frames in stack traces.

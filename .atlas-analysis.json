@@ -1,0 +1,101 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "async-profiler",
+  "projectDescription": "A low-overhead sampling profiler for Java that collects CPU, allocation, lock, and native memory profiles using AsyncGetCallTrace and perf_events, producing flame graphs and JFR output.",
+  "theme": "aspen",
+  "primaryColor": "#848c8e",
+  "lightColor": "#11161e",
+  "darkColor": "#cfd0d2",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Profiling Modes",
+            "pages": [
+              "profiling-modes/cpu",
+              "profiling-modes/allocation",
+              "profiling-modes/wall-clock-and-lock",
+              "profiling-modes/native-memory",
+              "profiling-modes/continuous-profiling"
+            ]
+          },
+          {
+            "group": "Output & Visualization",
+            "pages": [
+              "output/formats",
+              "output/flamegraph-interpretation",
+              "output/jfr-visualization",
+              "output/heatmap",
+              "output/converter-usage"
+            ]
+          },
+          {
+            "group": "Integration",
+            "pages": [
+              "integration/agent",
+              "integration/java-api",
+              "integration/container",
+              "integration/non-java"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/profiler-options",
+              "advanced/cpu-sampling-engines",
+              "advanced/stack-walking-modes",
+              "advanced/advanced-stacktrace-features",
+              "advanced/troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "CPU time profiling using perf_events + AsyncGetCallTrace without safepoint bias",
+    "Java heap allocation profiling with TLAB-driven sampling",
+    "Native memory allocation and leak detection via malloc/free interception",
+    "Lock contention profiling for both Java monitors and pthread locks",
+    "Wall-clock profiling for latency and startup analysis",
+    "Interactive flame graph output in HTML with differential comparison",
+    "JFR (Java Flight Recorder) output compatible with JDK Mission Control and IntelliJ IDEA",
+    "Heatmap visualization for analyzing continuous profiling data over time",
+    "Container-aware profiling with fdtransfer support",
+    "Multi-event simultaneous profiling (CPU + allocation + locks)",
+    "Non-Java application profiling via LD_PRELOAD and C API",
+    "Continuous profiling with loop mode and time-based rotation"
+  ],
+  "publicApiSurface": [
+    "asprof [action] [options] [PID] - CLI profiler launcher",
+    "asprof start/stop/status/dump/list/metrics - profiler lifecycle actions",
+    "asprof -e cpu|alloc|wall|lock|nativemem|<perf-event> - profiling event selection",
+    "asprof -o flamegraph|jfr|collapsed|tree|otlp - output format selection",
+    "asprof -d N - profile for N seconds duration",
+    "asprof --loop TIME - continuous profiling mode",
+    "asprof --alloc N - allocation profiling interval",
+    "asprof --nativemem N - native memory profiling",
+    "asprof --wall INTERVAL - wall-clock profiling",
+    "asprof --lock TIME / --nativelock TIME - lock profiling",
+    "asprof --jfrsync CONFIG - synchronized Java Flight Recording",
+    "asprof --all - enable all common profiling events simultaneously",
+    "jfrconv [options] <input> <output> - profile format converter",
+    "jfrconv --diff <baseline> <new> - differential flame graph",
+    "jfrconv --cpu/--alloc/--wall/--lock/--nativemem - filter by event type",
+    "-agentpath:/path/to/libasyncProfiler.so=start,event=cpu,file=profile.html - JVM agent mode",
+    "AsyncProfiler.getInstance() - Java API entry point",
+    "profiler.execute(String command) - Java API command execution",
+    "asprof_init() / asprof_execute() - C API for native applications",
+    "--cstack fp|dwarf|vm|vmx|no - native stack walking mode selection"
+  ]
+}

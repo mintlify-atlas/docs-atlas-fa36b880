@@ -1,97 +1,95 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "async-profiler"
+description: "A low-overhead sampling profiler for Java. Profile CPU, heap allocations, locks, and native memory — without safepoint bias."
 ---
 
-## Setting up
+async-profiler is a production-safe, low-overhead sampling profiler for Java. It combines `perf_events` with HotSpot-specific APIs to capture accurate stack traces across Java, native, JVM, and kernel frames — without the safepoint bias that affects most traditional Java profilers.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Profile a Java process in under a minute with a single command.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="download" href="/installation">
+    Download prebuilt binaries for Linux and macOS.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Profiling Modes" icon="chart-bar" href="/profiling-modes/cpu">
+    CPU, allocation, wall-clock, lock, and native memory profiling.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Profiler Options" icon="sliders" href="/advanced/profiler-options">
+    Full reference for all `asprof` flags and agent options.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Get up and running
 
-Everything you need to create world-class documentation.
+<Steps>
+  <Step title="Download async-profiler">
+    Grab the latest release for your platform from [GitHub Releases](https://github.com/async-profiler/async-profiler/releases/tag/v4.3).
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+    ```bash
+    # Linux x64
+    tar -xzf async-profiler-4.3-linux-x64.tar.gz
+    cd async-profiler-4.3-linux-x64
+    ```
+  </Step>
+  <Step title="Find your Java process">
+    Use `jps` to list running Java processes, or `pgrep`:
 
-## Need inspiration?
+    ```bash
+    jps
+    # 8983 MyApplication
+    ```
+  </Step>
+  <Step title="Profile for 30 seconds">
+    Run `asprof` with a duration and output file:
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+    ```bash
+    ./bin/asprof -d 30 -f flamegraph.html 8983
+    ```
+  </Step>
+  <Step title="Open the flame graph">
+    Open `flamegraph.html` in any browser to explore an interactive flame graph of your application's CPU usage.
+  </Step>
+</Steps>
+
+## What you can profile
+
+<CardGroup cols={2}>
+  <Card title="CPU time" icon="microchip" href="/profiling-modes/cpu">
+    Identify hot methods and native call stacks using `perf_events` + AsyncGetCallTrace.
+  </Card>
+  <Card title="Heap allocations" icon="memory" href="/profiling-modes/allocation">
+    Find allocation hot spots with TLAB-driven sampling. No bytecode instrumentation required.
+  </Card>
+  <Card title="Lock contention" icon="lock" href="/profiling-modes/wall-clock-and-lock">
+    Profile Java monitor contention and pthread lock waits to find threading bottlenecks.
+  </Card>
+  <Card title="Native memory" icon="server" href="/profiling-modes/native-memory">
+    Track `malloc`/`free` calls to detect native memory leaks in Java and C/C++ applications.
+  </Card>
+  <Card title="Wall-clock latency" icon="clock" href="/profiling-modes/wall-clock-and-lock">
+    Sample all threads regardless of state to analyze startup time and I/O latency.
+  </Card>
+  <Card title="Continuous profiling" icon="repeat" href="/profiling-modes/continuous-profiling">
+    Run in loop mode to capture rolling JFR profiles for long-term performance monitoring.
+  </Card>
+</CardGroup>
+
+## Output formats
+
+async-profiler can write results as interactive **flame graphs** (HTML), **JFR** recordings (for JDK Mission Control and IntelliJ IDEA), **pprof**, **OTLP**, and more. Use `jfrconv` to convert between formats after the fact.
+
+<CardGroup cols={2}>
+  <Card title="Output formats" icon="file-export" href="/output/formats">
+    Flame graph, JFR, collapsed, tree, OTLP, and pprof.
+  </Card>
+  <Card title="Converter usage" icon="arrows-rotate" href="/output/converter-usage">
+    Convert JFR recordings to flame graphs, heatmaps, and differential views.
+  </Card>
+  <Card title="Flame graph interpretation" icon="fire" href="/output/flamegraph-interpretation">
+    Learn to read and navigate async-profiler flame graphs.
+  </Card>
+  <Card title="Heatmap" icon="table-cells" href="/output/heatmap">
+    Visualize 24-hour continuous profiles with timeline-aware heatmaps.
+  </Card>
+</CardGroup>

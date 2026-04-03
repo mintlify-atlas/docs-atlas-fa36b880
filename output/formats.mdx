@@ -1,0 +1,171 @@
+---
+title: "Output formats"
+description: "Overview of all output formats supported by async-profiler, including flame graphs, JFR, collapsed stacks, tree views, and more."
+---
+
+async-profiler supports several output formats to fit different workflows. You select a format with the `-o` flag, or let async-profiler infer it from the output filename extension.
+
+## Formats at a glance
+
+| Format | `-o` value | File extension | Best for |
+|---|---|---|---|
+| Flame graph | `flamegraph` | `.html` | Interactive visual exploration |
+| JFR | `jfr` | `.jfr` | Multi-event recording, tooling integration |
+| Collapsed | `collapsed` | `.collapsed` | FlameGraph scripts, post-processing |
+| Tree | `tree` | — | Call-tree HTML view |
+| Text | `text` | — | Quick readable summary |
+| OTLP | `otlp` | — | OpenTelemetry profiling pipeline |
+
+---
+
+## Flame graph
+
+The flame graph format produces a self-contained interactive HTML file. It is automatically selected when the output filename ends in `.html`.
+
+```bash
+asprof -d 30 -o flamegraph -f profile.html 8983
+
+# Equivalent shorthand — format inferred from .html extension
+asprof -d 30 -f profile.html 8983
+```
+
+The resulting HTML file can be opened in any browser with no server required. Frames are color-coded by type, and you can click to zoom, search with Ctrl+F, and invert the view. See [Flame graph interpretation](/output/flamegraph-interpretation) for a full guide.
+
+---
+
+## JFR
+
+The JFR format writes a JDK Flight Recorder recording. Unlike other formats, JFR captures multiple event types in a single pass — for example, CPU and allocation samples together — which you can then separate during conversion.
+
+```bash
+asprof -d 30 -o jfr -f profile.jfr 8983
+```
+
+JFR files are compatible with:
+- [JDK Mission Control (JMC)](https://www.oracle.com/java/technologies/jdk-mission-control.html)
+- IntelliJ IDEA (Ultimate built-in viewer; Community via the Java JFR Profiler plugin)
+- The `jfr` CLI tool shipped with JDK distributions
+- async-profiler's own `jfrconv` converter
+
+Use JFR when you want to defer the choice of visualization, run multi-event profiling, or integrate with existing JFR-based tooling. See [JFR visualization](/output/jfr-visualization) and [Converter usage](/output/converter-usage) for details.
+
+<Tip>
+JFR is the most flexible format. Profile once in JFR mode and generate flame graphs, heatmaps, or pprof files later using `jfrconv`.
+</Tip>
+
+---
+
+## Collapsed
+
+The collapsed format writes one call stack per line as a semicolon-separated list of frames, followed by a sample count. This is the input format expected by Brendan Gregg's [FlameGraph](https://github.com/brendangregg/FlameGraph) scripts and other profiling tools.
+
+```bash
+asprof -d 30 -o collapsed -f profile.collapsed 8983
+```
+
+Example output:
+
+```text
+FileConverter.main;FileConverter.convertFile;FileConverter.saveResult 21
+FileConverter.main;FileConverter.convertFile;FileConverter.saveResult;java/io/DataOutputStream.writeInt 1
+FileConverter.main;FileConverter.convertFile;FileConverter.saveResult;java/io/DataOutputStream.writeInt;java/io/ByteArrayOutputStream.write 5
+FileConverter.main;FileConverter.convertFile;FileConverter.saveResult;java/io/DataOutputStream.writeUTF;java/io/DataOutputStream.writeUTF 12
+FileConverter.main;FileConverter.convertFile;FileConverter.saveResult;java/io/DataOutputStream.writeUTF;java/io/DataOutputStream.writeUTF;java/lang/String.length 3
+FileConverter.main;FileConverter.convertFile;FileConverter.saveResult;java/io/DataOutputStream.writeUTF;java/io/DataOutputStream.writeUTF;java/io/DataOutputStream.write 6
+start_thread;thread_native_entry;Thread::call_run;VMThread::run;VMThread::inner_execute;VMThread::evaluate_operation;VM_Operation::evaluate;VM_GenCollectForAllocation::doit;GenCollectedHeap::satisfy_failed_allocation;GenCollectedHeap::do_collection;GenCollectedHeap::collect_generation;DefNewGeneration::collect;DefNewGeneration::FastEvacuateFollowersClosure::do_void 12
+```
+
+Use this format when you need to pipe profiling data into external scripts or store compact stack trace data for later analysis.
+
+---
+
+## Tree
+
+The tree format generates an HTML call tree view. It begins with the call stack that has the highest resource usage and expands each frame into its callee hierarchy in descending order of usage.
+
+```bash
+asprof -d 30 -o tree -f profile-tree.html 8983
+```
+
+Add `--reverse` to generate a backtrace (callee-to-caller) view instead of the default top-down call tree.
+
+```bash
+asprof -d 30 -o tree --reverse -f profile-tree.html 8983
+```
+
+Use the tree view when you prefer a hierarchical drill-down interface to a flame graph.
+
+---
+
+## Text
+
+Text is the fallback format when no `-o` flag is given and the output filename has no recognized extension. It produces a human-readable list of the most frequently sampled call stacks with byte and sample counts.
+
+```bash
+asprof -d 30 -f profile.txt 8983
+```
+
+Example output:
+
+```text
+--- Execution profile ---
+Total samples       : 733
+
+--- 8208 bytes (19.58%), 1 sample
+[ 0] byte[]
+[ 1] java.util.jar.Manifest$FastInputStream.<init>
+[ 2] java.util.jar.Manifest$FastInputStream.<init>
+[ 3] java.util.jar.Manifest.read
+[ 4] java.util.jar.Manifest.<init>
+[ 5] java.util.jar.Manifest.<init>
+[ 6] java.util.jar.JarFile.getManifestFromReference
+[ 7] java.util.jar.JarFile.getManifest
+[ 8] jdk.internal.loader.URLClassPath$JarLoader$2.getManifest
+[ 9] jdk.internal.loader.BuiltinClassLoader.defineClass
+[10] jdk.internal.loader.BuiltinClassLoader.findClassOrNull
+[11] jdk.internal.loader.BuiltinClassLoader.loadClassOrNull
+[12] jdk.internal.loader.BuiltinClassLoader.loadClass
+[13] jdk.internal.loader.ClassLoaders$AppClassLoader.loadClass
+[14] java.lang.ClassLoader.loadClass
+[15] java.lang.Class.forName0
+[16] java.lang.Class.forName
+[17] sun.launcher.LauncherHelper.loadMainClass
+[18] sun.launcher.LauncherHelper.checkAndLoadMain
+```
+
+Use text output for quick inspection in a terminal or when piping results into other text-processing tools.
+
+---
+
+## OTLP
+
+The OTLP format emits profiling data in the [OpenTelemetry profiling format](https://opentelemetry.io/blog/2024/profiling), suitable for ingestion into OpenTelemetry-compatible observability backends.
+
+```bash
+asprof -d 30 -o otlp -f profile.otlp 8983
+```
+
+<Warning>
+OTLP profiling support is experimental. Backward-incompatible changes may occur in future releases of async-profiler.
+</Warning>
+
+Use OTLP when you are integrating async-profiler into an OpenTelemetry observability pipeline alongside traces and metrics.
+
+---
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="Flame graph interpretation" icon="fire" href="/output/flamegraph-interpretation">
+    How to read and navigate async-profiler flame graphs.
+  </Card>
+  <Card title="JFR visualization" icon="magnifying-glass-chart" href="/output/jfr-visualization">
+    Tools for viewing JFR recordings: JMC, IntelliJ IDEA, and jfr CLI.
+  </Card>
+  <Card title="Converter usage" icon="arrows-rotate" href="/output/converter-usage">
+    Convert between formats with `jfrconv` after profiling.
+  </Card>
+  <Card title="Heatmap" icon="table-cells" href="/output/heatmap">
+    Timeline-based visualization for intermittent performance issues.
+  </Card>
+</CardGroup>

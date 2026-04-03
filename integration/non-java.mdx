@@ -1,0 +1,182 @@
+---
+title: "Non-Java applications"
+description: "Profile native C/C++ and other non-Java applications using LD_PRELOAD or the C API."
+---
+
+## Overview
+
+async-profiler is not limited to Java. Native applications can be profiled using two
+mechanisms:
+
+- **`LD_PRELOAD`** — inject the profiler into a process at launch with an environment
+  variable command
+- **C API** — link against `libasyncProfiler.so` at runtime and control profiling
+  programmatically from C or C++ code
+
+Dynamic attach (as used by `asprof` against Java processes) is not supported for non-Java
+profiling. All profiler control must happen through `LD_PRELOAD` or the C API.
+
+<Warning>
+  Parts of the C API are marked as unstable and may change or be removed in a future
+  release of async-profiler. See the [unstable APIs](#unstable-apis) section below.
+</Warning>
+
+## LD_PRELOAD
+
+Inject `libasyncProfiler.so` into a native application by setting `LD_PRELOAD` and
+`ASPROF_COMMAND` before launching the process:
+
+```bash
+LD_PRELOAD=/path/to/libasyncProfiler.so \
+  ASPROF_COMMAND=start,event=cpu,file=profile.jfr \
+  NativeApp [args]
+```
+
+The value of `ASPROF_COMMAND` uses the same option syntax as the `asprof` CLI. All basic
+profiling modes work: `cpu`, `wall`, `nativemem`, and other `perf_events` modes. Both
+Flame Graph and JFR output formats are supported.
+
+<Note>
+  JFR files produced from native application profiling will not contain Java-specific events
+  (thread names, class loading, GC events, etc.) because there is no JVM present. The
+  call stacks and timing data are still fully accurate.
+</Note>
+
+### Continuous profiling with LD_PRELOAD
+
+Use `loop` to rotate output files automatically on a fixed interval. The example below
+profiles native memory allocations every 10 minutes with full DWARF call stacks:
+
+```bash
+LD_PRELOAD=/path/to/libasyncProfiler.so \
+  ASPROF_COMMAND=start,nativemem,total,loop=10m,cstack=dwarf,file=profile-%t.jfr \
+  NativeApp
+```
+
+The `%t` placeholder in the filename is replaced with a Unix timestamp on each rotation
+so files do not overwrite each other.
+
+## C API
+
+For programmatic control from C or C++ code, async-profiler exposes a stable C API
+through the `asprof.h` header file.
+
+### Header and loading
+
+The header is bundled in the async-profiler release package at `include/asprof.h`. Include
+it in your source and load the library at runtime with `dlopen`:
+
+```c
+#include "asprof.h"
+#include <dlfcn.h>
+```
+
+### API functions
+
+| Function | Description |
+|----------|-------------|
+| `asprof_init()` | Initialize the profiler. Must be called once before any other API function. |
+| `asprof_execute(cmd, callback)` | Execute a profiler command string. `callback` receives any text output. Returns `NULL` on success or an error code on failure. |
+| `asprof_error_str(err)` | Convert an error code to a human-readable string. |
+
+### Full working example
+
+```c
+#include "asprof.h"
+#include <dlfcn.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+void test_output_callback(const char* buffer, size_t size) {
+    fwrite(buffer, sizeof(char), size, stderr);
+}
+
+int main() {
+    void* lib = dlopen("/path/to/libasyncProfiler.so", RTLD_NOW);
+    if (lib == NULL) {
+        printf("%s\n", dlerror());
+        exit(1);
+    }
+
+    asprof_init_t asprof_init = (asprof_init_t)dlsym(lib, "asprof_init");
+    asprof_execute_t asprof_execute = (asprof_execute_t)dlsym(lib, "asprof_execute");
+    asprof_error_str_t asprof_error_str = (asprof_error_str_t)dlsym(lib, "asprof_error_str");
+
+    if (asprof_init == NULL || asprof_execute == NULL || asprof_error_str == NULL) {
+        printf("%s\n", dlerror());
+        dlclose(lib);
+        exit(1);
+    }
+
+    asprof_init();
+
+    printf("Starting profiler\n");
+
+    char cmd[] = "start,event=cpu,loglevel=debug,file=profile.jfr";
+    asprof_error_t err = asprof_execute(cmd, test_output_callback);
+    if (err != NULL) {
+        fprintf(stderr, "%s\n", asprof_error_str(err));
+        exit(1);
+    }
+
+    // ... some meaningful work ...
+
+    printf("Stopping profiler\n");
+
+    err = asprof_execute("stop", test_output_callback);
+    if (err != NULL) {
+        fprintf(stderr, "%s\n", asprof_error_str(err));
+        exit(1);
+    }
+
+    return 0;
+}
+```
+
+### Type signatures from `asprof.h`
+
+```c
+typedef const char* asprof_error_t;
+typedef void (*asprof_writer_t)(const char* buf, size_t size);
+
+// Initialize the profiler (call once before any other function)
+void asprof_init();
+
+// Execute a profiler command; output goes to the callback
+// Returns NULL on success, or an error code on failure
+asprof_error_t asprof_execute(const char* command, asprof_writer_t output_callback);
+
+// Convert an error code to a human-readable message
+const char* asprof_error_str(asprof_error_t err);
+```
+
+## Native memory leak detection
+
+After collecting a native memory profile, use `jfrconv` to generate a leak report that
+shows allocations that were never freed:
+
+```bash
+jfrconv --total --nativemem --leak profile.jfr leak.html
+```
+
+Open `leak.html` in a browser to view a flame graph of allocation call stacks weighted
+by leaked bytes.
+
+## Unstable APIs
+
+The following APIs are available in `asprof.h` but are marked unstable and may change
+or be removed in any future release:
+
+- **`asprof_get_thread_local_data()`** — returns a pointer to a per-thread structure
+  containing a `sample_counter` field that increments on every profiling signal. Useful
+  for native code that needs to detect when a sample event has occurred without modifying
+  the profiler itself.
+- **`asprof_register_jfr_event(name)`** — registers a named user-defined JFR event type
+  and returns a key for use with `asprof_emit_jfr_event`.
+- **`asprof_emit_jfr_event(key, data, len)`** — emits a custom JFR event with arbitrary
+  binary payload (up to `ASPROF_MAX_JFR_EVENT_LENGTH` bytes).
+
+<Warning>
+  Do not depend on these unstable APIs in production code without pinning to a specific
+  async-profiler version. Their signatures and behavior may change without notice.
+</Warning>

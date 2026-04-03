@@ -1,0 +1,139 @@
+---
+title: "Java API"
+description: "Control async-profiler programmatically from Java using the official Maven library."
+---
+
+## Overview
+
+The async-profiler Java API lets you start, stop, and configure profiling directly from
+application code. Common use cases include:
+
+- Profiling specific code paths in integration tests
+- Triggering profiling based on application events (e.g., high latency, manual flag)
+- Benchmarking workflows that need precise profiling boundaries
+
+## Add the dependency
+
+<CodeGroup>
+
+```xml Maven
+<dependency>
+    <groupId>tools.profiler</groupId>
+    <artifactId>async-profiler</artifactId>
+    <version>4.3</version>
+</dependency>
+```
+
+```groovy Gradle
+implementation 'tools.profiler:async-profiler:4.3'
+```
+
+</CodeGroup>
+
+The library is published to [Maven Central](https://mvnrepository.com/artifact/tools.profiler/async-profiler/latest).
+Replace `4.3` with the latest available version.
+
+## Usage
+
+<Steps>
+  <Step title="Get a profiler instance">
+    Obtain a singleton `AsyncProfiler` object. This loads the native library for the current
+    platform automatically.
+
+    ```java
+    AsyncProfiler profiler = AsyncProfiler.getInstance();
+    ```
+  </Step>
+
+  <Step title="Start profiling">
+    Call `execute()` with a command string using the same option syntax as the CLI. For JFR
+    output, specify `file` in the `start` command:
+
+    ```java
+    profiler.execute("start,jfr,event=cpu,file=/path/to/%p.jfr");
+    ```
+
+    The `%p` placeholder expands to the PID of the current process. Other placeholders such
+    as `%t` (timestamp) are also supported.
+  </Step>
+
+  <Step title="Run your workload">
+    Execute the code you want to profile. The profiler collects samples asynchronously in the
+    background.
+
+    ```java
+    // run the code you want to measure
+    doWork();
+    ```
+  </Step>
+
+  <Step title="Stop profiling">
+    Stop the profiler. For formats other than JFR, specify `file` in the `stop` command
+    instead of `start`:
+
+    ```java
+    profiler.execute("stop");
+    ```
+
+    For non-JFR formats (flame graph HTML, collapsed stacks), pass the output file here:
+
+    ```java
+    profiler.execute("stop,file=/path/to/profile.html");
+    ```
+  </Step>
+</Steps>
+
+## File placement for different output formats
+
+The `file` option placement matters depending on the output format:
+
+| Format | Specify `file` in |
+|--------|-------------------|
+| JFR (`.jfr`) | `start` command |
+| Flame graph (`.html`) | `stop` command |
+| Collapsed stacks (`.collapsed`) | `stop` command |
+| Text summary | `stop` command |
+
+## Full example
+
+```java
+import one.profiler.AsyncProfiler;
+
+public class ProfiledBenchmark {
+
+    public static void main(String[] args) throws Exception {
+        AsyncProfiler profiler = AsyncProfiler.getInstance();
+
+        // start CPU profiling, write JFR to a file named with the PID
+        profiler.execute("start,jfr,event=cpu,file=/tmp/%p-profile.jfr");
+
+        runBenchmark();
+
+        // stop and flush output
+        profiler.execute("stop");
+
+        System.out.println("Profile written to /tmp/" + ProcessHandle.current().pid() + "-profile.jfr");
+    }
+
+    static void runBenchmark() throws InterruptedException {
+        // workload to profile
+        Thread.sleep(5000);
+    }
+}
+```
+
+## All CLI options are available
+
+Every option accepted by the `asprof` CLI is also accepted by `execute()`. For example,
+you can combine multiple events, set sampling intervals, or switch profiling modes:
+
+```java
+// wall-clock profiling with a 10ms interval
+profiler.execute("start,event=wall,interval=10ms,file=/tmp/wall-%p.jfr");
+
+// allocation profiling
+profiler.execute("start,event=alloc,file=/tmp/alloc-%p.jfr");
+```
+
+Refer to the [Profiler Options](/advanced/profiler-options) reference for the full list of
+available options.

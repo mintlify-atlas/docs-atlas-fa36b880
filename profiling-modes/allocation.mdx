@@ -1,0 +1,123 @@
+---
+title: "Allocation profiling"
+description: "Find heap allocation hot spots with TLAB-driven sampling — no bytecode instrumentation, no DTrace probes, and minimal overhead."
+---
+
+Allocation profiling identifies the call sites responsible for the most heap memory allocation. Unlike traditional approaches, async-profiler does not instrument bytecode, install DTrace probes, or interfere with JIT optimizations. Only actual heap allocations are measured.
+
+## How it works
+
+async-profiler uses TLAB-driven sampling. It registers HotSpot-specific callbacks to receive two kinds of notifications:
+
+- **New TLAB allocation** — fired when an object is allocated in a newly created Thread-Local Allocation Buffer (TLAB). Most small object allocations follow this fast path.
+- **Slow-path allocation** — fired when an object is too large to fit in a TLAB and is allocated directly on the heap outside of any TLAB.
+
+Because sampling is driven by allocation events rather than wall-clock time, async-profiler captures allocation pressure proportional to actual bytes allocated, not time spent in allocating code.
+
+### What the flame graph shows
+
+In allocation profiling mode:
+
+- The **top frame** of every call trace is the **class of the allocated object**.
+- The **counter** represents **heap pressure** — the total size of allocated TLABs or objects allocated outside TLAB.
+
+This makes it easy to see both which object types consume the most memory and which code paths allocate them.
+
+<Note>
+  Escape Analysis and JIT allocation elimination are not affected. async-profiler only sees allocations that actually reach the heap — stack-allocated or eliminated objects are not counted.
+</Note>
+
+## Quick start
+
+```bash
+asprof -e alloc -d 30 -f alloc.html 8983
+```
+
+This profiles PID `8983` for 30 seconds and writes an allocation flame graph to `alloc.html`.
+
+## Adjusting the sampling interval
+
+By default, async-profiler samples every allocation event. On allocation-heavy applications this can produce a large volume of samples. Use `--alloc N` to sample approximately once per `N` bytes allocated:
+
+```bash
+# Sample once per 500 KB allocated on average
+asprof --alloc 500k -d 30 -f alloc.html 8983
+
+# Sample once per 2 MB allocated on average
+asprof --alloc 2m -d 30 -f alloc.html 8983
+```
+
+Supported unit suffixes: `k` (kilobytes), `m` (megabytes), `g` (gigabytes).
+
+<Note>
+  Prior to JDK 11, intervals smaller than the TLAB size have no effect — sampling granularity is limited by TLAB boundaries.
+</Note>
+
+## Detecting heap leaks with `--live`
+
+The `--live` flag retains only allocation samples whose objects are still alive at the end of the profiling session. Objects that were collected by the garbage collector during profiling are excluded from the output.
+
+```bash
+asprof --alloc 2m --live -d 60 -f live.html 8983
+```
+
+This is particularly useful for detecting Java heap memory leaks: if the flame graph shows classes accumulating over time that should have been collected, those are candidates for investigation.
+
+<Tip>
+  Run `--live` profiling over a long duration (several minutes) after the application has warmed up. This gives the GC time to collect short-lived objects and leaves only genuinely long-lived allocations in the profile.
+</Tip>
+
+## Installing debug symbols
+
+Prior to JDK 11, the allocation profiler requires HotSpot debug symbols to locate the TLAB callback sites inside `libjvm.so`.
+
+Some OpenJDK distributions embed debug symbols directly:
+
+- Amazon Corretto
+- Liberica JDK
+- Azul Zulu
+
+Other distributions provide them as a separate package.
+
+<Tabs>
+  <Tab title="Debian / Ubuntu">
+    ```bash
+    apt install openjdk-17-dbg
+    ```
+
+    Replace `17` with your JDK version.
+  </Tab>
+  <Tab title="CentOS / RHEL">
+    ```bash
+    debuginfo-install java-1.8.0-openjdk
+    ```
+
+    Uses the [`debuginfo-install`](http://man7.org/linux/man-pages/man1/debuginfo-install.1.html) utility. Replace the package name with your installed JDK package.
+  </Tab>
+  <Tab title="Gentoo">
+    Build the `icedtea` OpenJDK package with the per-package setting:
+
+    ```bash
+    FEATURES="nostrip" emerge icedtea
+    ```
+  </Tab>
+</Tabs>
+
+### Verifying debug symbols
+
+Use `gdb` to confirm that debug symbols are correctly installed for `libjvm`:
+
+```bash
+gdb $JAVA_HOME/lib/server/libjvm.so -ex 'info address UseG1GC'
+```
+
+The output should contain `Symbol "UseG1GC" is at 0x...`. If it says `No symbol "UseG1GC" in current context`, the debug symbols are missing or not correctly installed.
+
+<CardGroup cols={2}>
+  <Card title="Native memory profiling" icon="server" href="/profiling-modes/native-memory">
+    Track malloc and free to find native (non-heap) memory leaks.
+  </Card>
+  <Card title="Profiler options" icon="sliders" href="/advanced/profiler-options">
+    Full reference for `--alloc`, `--live`, and all other flags.
+  </Card>
+</CardGroup>

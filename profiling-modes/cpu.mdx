@@ -1,0 +1,198 @@
+---
+title: "CPU profiling"
+description: "Sample CPU time across Java, native, JVM, and kernel frames without safepoint bias using perf_events and AsyncGetCallTrace."
+---
+
+CPU profiling is the most common starting point for performance analysis. async-profiler collects stack trace samples that include **Java** methods, **native** calls, **JVM** code, and **kernel** functions — all in a single coherent flame graph.
+
+## How it works
+
+async-profiler combines two signal sources:
+
+1. **`perf_events`** — the Linux kernel's performance event subsystem generates a signal every N nanoseconds of CPU time consumed by a thread.
+2. **`AsyncGetCallTrace`** — a HotSpot JVMTI extension that walks the Java stack from a signal handler without requiring a safepoint.
+
+The profiler matches the native call stack from `perf_events` with the Java stack from `AsyncGetCallTrace`. This produces an accurate combined view of both Java and native frames. async-profiler also includes a workaround to recover stack traces in corner cases where `AsyncGetCallTrace` fails.
+
+### Why this avoids safepoint bias
+
+Traditional Java profilers that rely on `Thread.getStackTrace()` or JVMTI `GetStackTrace` can only capture stacks at a safepoint — a point where all threads have paused and the JVM is in a known state. This means profilers systematically miss code that runs between safepoints, skewing results toward safepoint-heavy regions.
+
+async-profiler uses `AsyncGetCallTrace`, which works asynchronously from a signal handler and does not wait for safepoints. Samples are taken at the exact moment the signal fires, representing true CPU usage.
+
+### Advantages over plain `perf_events`
+
+Using async-profiler instead of raw `perf` tooling with a Java agent provides several benefits:
+
+- **No `-XX:+PreserveFramePointer` required.** This JVM flag can introduce up to 10% performance overhead — async-profiler's stack walking works without it.
+- **No intermediate `perf.data` files.** Results are processed in-process and emitted directly as flame graphs or JFR recordings.
+- **Interpreter frames are visible.** Methods running in the interpreter are shown in the profile, not hidden behind stubs.
+- **No agent needed for address translation.** async-profiler resolves Java method names itself without requiring a separate JVMTI agent.
+
+<Note>
+  To resolve frames within `libjvm` itself, debug symbols for the JVM must be installed. See [Installing debug symbols](/profiling-modes/allocation#installing-debug-symbols).
+</Note>
+
+## Quick start
+
+```bash
+asprof -e cpu -d 30 -f profile.html 8983
+```
+
+This profiles PID `8983` for 30 seconds and writes an interactive flame graph to `profile.html`.
+
+## The three CPU sampling engines
+
+async-profiler provides three distinct engines for CPU profiling. The `-e cpu` flag selects the engine automatically, but you can specify one explicitly.
+
+### `cpu` — perf_events (default)
+
+```bash
+asprof -e cpu -d 30 -f profile.html 8983
+```
+
+Uses the Linux `perf_event_open` syscall. One `perf_event` descriptor is created per running thread, configured to fire a signal every N nanoseconds of CPU time. This is the most accurate engine and the only one that captures kernel stack traces.
+
+### `ctimer` — timer_create
+
+```bash
+asprof -e ctimer -d 30 -f profile.html 8983
+```
+
+A Linux-specific alternative that uses the `timer_create` API. It combines per-thread accuracy with container compatibility, but cannot collect kernel stack traces.
+
+### `itimer` — setitimer
+
+```bash
+asprof -e itimer -d 30 -f profile.html 8983
+```
+
+Based on `setitimer(ITIMER_PROF)`, which generates a signal at a given interval of CPU time consumed by the whole process. Works on Linux and macOS but delivers signals less evenly across threads.
+
+### Engine comparison
+
+| Attribute | `cpu` (perf_events) | `itimer` | `ctimer` |
+|---|:---:|:---:|:---:|
+| Can collect kernel stack traces | ✅ | ❌ | ❌ |
+| High resolution | ✅ | ❌ | ❌ |
+| Accuracy / fairness | ✅ | ❌ | 🆗 |
+| Works in containers by default | ❌ | ✅ | ✅ |
+| Does not consume file descriptors | ❌ | ✅ | ✅ |
+| macOS support | ❌ | ✅ | ❌ |
+
+### Automatic fallback
+
+When you specify `-e cpu`, async-profiler checks whether `perf_events` is available by attempting to create a test event. If kernel-space profiling is unavailable (for example, inside a Docker container with a restrictive seccomp profile), async-profiler transparently falls back to `ctimer` mode and logs a warning.
+
+To force `perf_events` for user-space-only profiling without this fallback, use:
+
+```bash
+asprof -e cpu-clock --all-user -d 30 -f profile.html 8983
+```
+
+The actual engine used is recorded in the JFR output so you can verify which one ran.
+
+<Tip>
+  For more detail on each engine's behavior, limitations, and when to choose each one, see [CPU sampling engines](/advanced/cpu-sampling-engines).
+</Tip>
+
+## Hardware PMU events
+
+In addition to CPU time, async-profiler can sample on hardware performance counter events exposed by the processor's Performance Monitoring Unit (PMU). These events let you profile for specific hardware behaviors like cache misses or branch mispredictions.
+
+```bash
+asprof -e cache-misses -d 30 -f profile.html 8983
+asprof -e cycles -d 30 -f profile.html 8983
+asprof -e instructions -d 30 -f profile.html 8983
+asprof -e branch-misses -d 30 -f profile.html 8983
+```
+
+Common hardware events:
+
+| Event | Description |
+|---|---|
+| `cycles` | Total CPU cycles |
+| `ref-cycles` | Reference cycles, unaffected by CPU frequency scaling |
+| `instructions` | Retired CPU instructions |
+| `cache-references` | Cache accesses (usually Last Level Cache) |
+| `cache-misses` | Cache accesses that required fetching from a higher-level cache or main memory |
+| `branch-instructions` | Retired branch instructions |
+| `branch-misses` | Mispredicted branch instructions |
+| `bus-cycles` | Bus cycles |
+| `L1-dcache-load-misses` | Misses on Level 1 Data Cache |
+| `LLC-load-misses` | Misses on the Last Level Cache |
+| `dTLB-load-misses` | Data load misses on the TLB |
+
+You can also use raw PMU event numbers and descriptors:
+
+```bash
+# Raw PMU event number
+asprof -e r4d2 -d 30 -f profile.html 8983
+
+# PMU descriptor
+asprof -e cpu/cache-misses/ -d 30 -f profile.html 8983
+asprof -e cpu/event=0xd2,umask=4/ -d 30 -f profile.html 8983
+
+# Vendor-specific uncore events
+asprof -e amd_l3/event=0x01,umask=0x80/ -d 30 -f profile.html 8983
+```
+
+Run `asprof list <PID>` to see all hardware events available on your system.
+
+## Kernel setup
+
+The `cpu` (perf_events) engine may require kernel-level configuration on some systems.
+
+### `kernel.perf_event_paranoid`
+
+This sysctl setting controls which users can access `perf_events`. The default value varies by distribution:
+
+```bash
+# Check the current value
+sysctl kernel.perf_event_paranoid
+
+# Allow unprivileged access (requires root)
+sysctl -w kernel.perf_event_paranoid=1
+```
+
+| Value | Meaning |
+|---|---|
+| `-1` | No restrictions |
+| `0` | Allow access to CPU data |
+| `1` (default on many distros) | Allow user-space profiling only |
+| `2` | Require `CAP_PERFMON` capability |
+| `3` | Fully restricted |
+
+If `perf_events` are unavailable due to this setting, async-profiler falls back to `ctimer`.
+
+### `kernel.kptr_restrict`
+
+This setting controls whether kernel symbol addresses are hidden. If kernel symbols are hidden, async-profiler still uses `perf_events` but emits a warning and omits kernel frames from the profile:
+
+```bash
+# Expose kernel symbols (requires root)
+sysctl -w kernel.kptr_restrict=0
+```
+
+### File descriptor limits
+
+The `cpu` engine opens one file descriptor per running thread. On applications with many threads, you may hit the OS file descriptor limit:
+
+```bash
+# Check the current limit
+ulimit -n
+
+# Increase the limit for the current session
+ulimit -n 65536
+```
+
+If this is a persistent issue, prefer `-e ctimer`, which does not consume file descriptors.
+
+<CardGroup cols={2}>
+  <Card title="CPU sampling engines" icon="microchip" href="/advanced/cpu-sampling-engines">
+    Deep dive into perf_events, ctimer, and itimer engine internals.
+  </Card>
+  <Card title="Profiler options" icon="sliders" href="/advanced/profiler-options">
+    Full reference for all `asprof` flags and agent configuration.
+  </Card>
+</CardGroup>

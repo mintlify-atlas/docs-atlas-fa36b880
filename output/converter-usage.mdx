@@ -1,0 +1,217 @@
+---
+title: "Converter usage"
+description: "Full reference for jfrconv, async-profiler's built-in tool for converting JFR recordings and other profile formats into flame graphs, heatmaps, pprof, and more."
+---
+
+async-profiler ships a `jfrconv` utility for converting between profile output formats. It lives in the `bin/` directory of the async-profiler package alongside `asprof`. A standalone version is also available as a self-contained JAR for use on machines without the full async-profiler installation.
+
+---
+
+## Supported conversions
+
+Not all source formats can produce all output types. The table below summarizes what `jfrconv` supports:
+
+| Source | to html | to collapsed | to pprof | to pb.gz | to heatmap | to otlp |
+|---|---|---|---|---|---|---|
+| jfr | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| html | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| collapsed | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+JFR is the most capable source format. For heatmaps, pprof, and OTLP output, you must start from a JFR recording.
+
+---
+
+## Usage
+
+```bash
+jfrconv [options] <input> [<input>...] <output>
+```
+
+You can omit `-o FORMAT` if the output filename extension unambiguously determines the format — for example, `profile.collapsed` or `profile.html`. Only one output format can be produced per invocation.
+
+---
+
+## Options reference
+
+### Event filter options
+
+These flags filter which event types are included in the output. Without a filter, all event types in the recording are aggregated together, which is rarely what you want for a multi-event JFR recording.
+
+| Option | Description |
+|---|---|
+| `--cpu` | CPU samples only (`ExecutionSample` events) |
+| `--cpu-time` | CPU samples using `CPUTimeSample` events |
+| `--wall` | Wall-clock samples only |
+| `--alloc` | Allocation samples only |
+| `--live` | Allocation profile from live objects only |
+| `--nativemem` | Native memory allocation profile |
+| `--lock` | Java monitor lock contention only |
+| `--nativelock` | Native (pthread) lock contention only |
+| `--trace` | Convert only `MethodTrace` events |
+
+### Thread and state options
+
+| Option | Description |
+|---|---|
+| `-t` / `--threads` | Split stack traces by thread |
+| `-s` / `--state LIST` | Filter by thread state: `runnable`, `sleeping`, `default` (case-insensitive, can be abbreviated) |
+
+### Time range options
+
+| Option | Description |
+|---|---|
+| `--from TIME` | Start of the time range to include |
+| `--to TIME` | End of the time range to include |
+
+`TIME` can be specified as:
+- An absolute timestamp in milliseconds since epoch
+- An absolute time in `hh:mm:ss` or `yyyy-MM-dd'T'hh:mm:ss` format
+- A relative time from the beginning of the recording
+- A negative relative time from the end of the recording
+
+### Output shaping options
+
+| Option | Description |
+|---|---|
+| `--classify` | Classify samples into predefined categories |
+| `--total` | Accumulate total value (time, bytes, etc.) instead of sample counts |
+| `--lines` | Show line numbers in stack frames |
+| `--bci` | Show bytecode indices in stack frames |
+| `--simple` | Simple class names instead of fully qualified names |
+| `--norm` | Normalize hidden class and lambda names (e.g. collapse `ClassName$$Lambda+0x...` to `ClassName$$Lambda`) |
+| `--dot` | Dotted class names (`java.lang.String` instead of `java/lang/String`) |
+| `--latency MS` | Retain only samples within `MethodTrace` events lasting at least `MS` milliseconds |
+
+### Flame graph appearance options
+
+| Option | Description |
+|---|---|
+| `--title STRING` | Title displayed at the top of the flame graph (default: `Flame Graph`) |
+| `--minwidth X` | Skip frames narrower than `X`% of the total width |
+| `--grain X` | Coarsen the flame graph to the given grain size |
+| `--skip N` | Skip `N` bottom frames |
+| `-r` / `--reverse` | Reverse stack traces (produces an icicle layout by default) |
+| `-i` / `--inverted` | Toggle layout: icicle ↔ flame graph orientation |
+| `-I` / `--include REGEX` | Include only stacks containing frames matching the regex |
+| `-X` / `--exclude REGEX` | Exclude stacks containing frames matching the regex |
+| `--highlight REGEX` | Highlight frames matching the pattern |
+
+<Note>
+`--reverse` and `--inverted` are orthogonal. `--reverse` reverses the stack trace order before rendering (icicle by default). `--inverted` flips the visual layout. You can use both together.
+</Note>
+
+---
+
+## Examples
+
+### Generate a flame graph from a JFR file
+
+If no output file is specified, `jfrconv` defaults to an HTML flame graph named after the input file:
+
+```bash
+jfrconv foo.jfr
+# Produces foo.html
+```
+
+For a multi-event recording, always pass an event filter to avoid a nonsensical aggregation:
+
+```bash
+jfrconv --cpu foo.jfr
+# Equivalent to: jfrconv --cpu -o html foo.jfr foo.html
+```
+
+### Flame graph with custom title and reversed stacks
+
+```bash
+jfrconv --cpu foo.jfr foo.html -r --title "CPU Profile"
+```
+
+### Convert to collapsed format for use with external scripts
+
+```bash
+jfrconv --cpu -o collapsed foo.jfr foo.collapsed
+```
+
+### Filter by time range
+
+```bash
+jfrconv --cpu --from "14:30:00" --to "14:45:00" foo.jfr interval.html
+```
+
+### Generate a heatmap
+
+```bash
+jfrconv --cpu -o heatmap profiler.jfr heatmap.html
+```
+
+See [Heatmap](/output/heatmap) for details on the heatmap format and its interactive features.
+
+### Merge multiple recordings
+
+`jfrconv` accepts multiple input files. All inputs are merged into a single output:
+
+```bash
+jfrconv --cpu recording1.jfr recording2.jfr merged.html
+```
+
+---
+
+## Differential flame graphs
+
+A differential flame graph compares two profiles side by side using a color scheme that makes regressions and improvements immediately visible:
+
+| Color | Meaning |
+|---|---|
+| Red | More samples than baseline (regression) |
+| Blue | Fewer samples than baseline (improvement) |
+| Yellow | Frames present in the new profile but absent in the baseline |
+
+Color intensity reflects the magnitude of the delta. Hovering over a frame shows the exact delta value in the tooltip.
+
+<Note>
+A differential flame graph takes the shape of the **current** (new) profile. Frames that exist only in the baseline will not appear. To see those frames, create a second differential graph with the inputs swapped.
+</Note>
+
+Use `--diff` with two input files — the baseline first, then the new profile:
+
+```bash
+jfrconv --cpu --diff baseline.jfr new.jfr diff.html
+```
+
+If you omit the output filename, `jfrconv` names it after the second input with a `.diff.html` extension:
+
+```bash
+jfrconv --cpu --diff baseline.jfr new.jfr
+# Produces new.diff.html
+```
+
+Both input files can be in JFR, HTML, or collapsed format.
+
+---
+
+## Standalone converter JAR
+
+A standalone `jfr-converter.jar` is available for machines where only a JRE is installed (not the full async-profiler package). Download it from the [latest release](https://github.com/async-profiler/async-profiler/releases/latest/download/jfr-converter.jar). It accepts the same options as `jfrconv`:
+
+```bash
+java -jar jfr-converter.jar --cpu foo.jfr --reverse --title "Application CPU profile"
+```
+
+---
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="Output formats" icon="file-export" href="/output/formats">
+    All formats async-profiler can write directly during profiling.
+  </Card>
+  <Card title="Heatmap" icon="table-cells" href="/output/heatmap">
+    Interactive timeline visualization generated from JFR with jfrconv.
+  </Card>
+  <Card title="JFR visualization" icon="magnifying-glass-chart" href="/output/jfr-visualization">
+    View JFR recordings in JMC, IntelliJ IDEA, or the jfr CLI.
+  </Card>
+  <Card title="Flame graph interpretation" icon="fire" href="/output/flamegraph-interpretation">
+    How to read the flame graphs that jfrconv produces.
+  </Card>
+</CardGroup>

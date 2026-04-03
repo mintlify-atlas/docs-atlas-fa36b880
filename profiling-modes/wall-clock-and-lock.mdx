@@ -1,0 +1,114 @@
+---
+title: "Wall-clock and lock profiling"
+description: "Analyze latency, I/O wait, and lock contention using wall-clock, Java monitor, and pthread lock profiling modes."
+---
+
+Beyond CPU time, async-profiler can profile threads regardless of whether they are actively running, and can directly measure time spent waiting for Java monitors and native pthread locks. These modes are essential for diagnosing latency, I/O bottlenecks, and threading contention.
+
+## Wall-clock profiling
+
+Wall-clock profiling samples all threads at a fixed real-time interval, regardless of their current state — `Running`, `Sleeping`, or `Blocked`. Unlike CPU profiling, which only fires samples on threads consuming CPU cycles, wall-clock profiling captures threads that are waiting on I/O, sleeping, or stuck on a lock.
+
+```bash
+asprof -e wall -t -i 50ms -f result.html 8983
+```
+
+### When to use it
+
+- **Application startup time** — identify slow initialization paths that block the main thread.
+- **Latency analysis** — find where request-handling threads spend time waiting rather than computing.
+- **I/O profiling** — surface threads blocked on network or disk operations that CPU profiling would miss.
+
+### Per-thread mode
+
+Wall-clock profiling is most useful combined with `-t` (per-thread mode). Without `-t`, all samples are merged into a single flame graph, which can obscure which thread is responsible for which latency. With `-t`, each thread's stack traces are kept separate:
+
+```bash
+asprof -e wall -t -i 50ms -f result.html 8983
+```
+
+<Tip>
+  Use `-i 50ms` or similar intervals for wall-clock profiling. Very short intervals (under 10ms) produce high overhead since all threads are sampled simultaneously regardless of CPU usage.
+</Tip>
+
+### Combined CPU and wall-clock profiling
+
+You can profile CPU and wall-clock simultaneously. The `--wall` option adds wall-clock sampling alongside whatever primary event you specify. The output must be JFR format when using multiple events:
+
+```bash
+asprof -e cpu --wall 100ms -f combined.jfr 8983
+```
+
+The JFR recording will contain both `jdk.ExecutionSample` events from CPU profiling and `profiler.WallClockSample` events from wall-clock profiling.
+
+## Java lock profiling
+
+Lock profiling measures Java monitor contention — specifically, how long threads wait to acquire a synchronized block or `java.util.concurrent` lock.
+
+```bash
+asprof -e lock -t -i 5ms -f result.html 8983
+```
+
+### What the flame graph shows
+
+In lock profiling mode:
+
+- The **top frame** is the **class of the lock or monitor** being contended.
+- The **counter** is the **number of nanoseconds** threads spent waiting to acquire that lock.
+
+This makes it easy to identify which locks are the most contended and trace back through the call stack to understand what work is being serialized.
+
+### Filtering low-contention locks
+
+In a large application, many locks are acquired with negligible wait time. Use `--lock TIME` to suppress lock events below a threshold and focus on genuinely contended locks:
+
+```bash
+# Only record locks where wait time exceeds 5ms
+asprof --lock 5ms -t -f result.html 8983
+```
+
+The threshold can be specified in nanoseconds, microseconds (`us`), or milliseconds (`ms`).
+
+## Native lock profiling
+
+Native lock profiling measures contention on pthread synchronization primitives used by native libraries and the JVM itself. This captures contention that Java lock profiling cannot see because it occurs below the Java layer.
+
+```bash
+asprof --nativelock 5ms -t -f result.html 8983
+```
+
+### How it works
+
+async-profiler intercepts calls to three pthread functions:
+
+- [`pthread_mutex_lock`](https://man7.org/linux/man-pages/man3/pthread_mutex_lock.3p.html)
+- [`pthread_rwlock_rdlock`](https://man7.org/linux/man-pages/man3/pthread_rwlock_rdlock.3p.html)
+- [`pthread_rwlock_wrlock`](https://man7.org/linux/man-pages/man3/pthread_rwlock_wrlock.3p.html)
+
+When a thread blocks waiting on one of these, async-profiler records the time spent waiting along with the full call stack.
+
+### What the flame graph shows
+
+- The **top frame** is the **native function** where contention occurred (for example, `pthread_mutex_lock_hook`).
+- The **counter** is the **number of nanoseconds** threads spent waiting to acquire the lock.
+
+### Comparison: Java vs native lock profiling
+
+| Aspect | `-e lock` (Java) | `--nativelock` (native) |
+|---|---|---|
+| Targets | Java monitors, `java.util.concurrent` | `pthread_mutex_t`, `pthread_rwlock_t` |
+| Visible code paths | Java stack frames | Native and Java stack frames |
+| Use case | Java threading contention | JVM internals, C/C++ library contention |
+
+<Note>
+  Native lock profiling works with pure C/C++ applications as well as Java applications that use native libraries. It can reveal contention inside the JVM itself (for example, in the class loading or JIT compiler subsystems) that is invisible to Java lock profiling.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="CPU profiling" icon="microchip" href="/profiling-modes/cpu">
+    Sample CPU time across Java, native, and kernel frames.
+  </Card>
+  <Card title="Continuous profiling" icon="repeat" href="/profiling-modes/continuous-profiling">
+    Capture rolling profiles with `--loop` for long-term monitoring.
+  </Card>
+</CardGroup>

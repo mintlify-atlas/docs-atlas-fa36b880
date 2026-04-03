@@ -1,0 +1,170 @@
+---
+title: "Installation"
+description: "Download a pre-built release, add the Java API dependency, or build async-profiler from source."
+---
+
+## Download a release
+
+The current stable release is **v4.3**. Download the archive for your platform and extract it.
+
+<Tabs>
+  <Tab title="Linux">
+    **Linux x64**
+
+    ```bash
+    curl -Lo async-profiler.tar.gz \
+      https://github.com/async-profiler/async-profiler/releases/download/v4.3/async-profiler-4.3-linux-x64.tar.gz
+    tar -xzf async-profiler.tar.gz
+    ```
+
+    **Linux arm64**
+
+    ```bash
+    curl -Lo async-profiler.tar.gz \
+      https://github.com/async-profiler/async-profiler/releases/download/v4.3/async-profiler-4.3-linux-arm64.tar.gz
+    tar -xzf async-profiler.tar.gz
+    ```
+  </Tab>
+  <Tab title="macOS">
+    **macOS (arm64 and x64 universal binary)**
+
+    ```bash
+    curl -Lo async-profiler.zip \
+      https://github.com/async-profiler/async-profiler/releases/download/v4.3/async-profiler-4.3-macos.zip
+    unzip async-profiler.zip
+    ```
+  </Tab>
+</Tabs>
+
+The standalone **JFR converter** (for converting JFR recordings to flamegraphs, heatmaps, and other formats) is also available separately:
+
+```bash
+curl -LO https://github.com/async-profiler/async-profiler/releases/download/v4.3/jfr-converter.jar
+```
+
+### Package contents
+
+After extracting, the archive contains:
+
+```
+async-profiler-4.3-linux-x64/
+├── bin/
+│   ├── asprof          # Command-line profiler launcher
+│   └── jfrconv         # JFR converter tool
+├── lib/
+│   └── libasyncProfiler.so   # Profiler agent (libasyncProfiler.dylib on macOS)
+├── include/
+│   └── asprof.h        # C header for native API
+└── README.md
+```
+
+Add `bin/` to your `PATH` so you can run `asprof` and `jfrconv` from any directory:
+
+```bash
+export PATH="$PATH:/path/to/async-profiler-4.3-linux-x64/bin"
+```
+
+## Java API dependency
+
+If you want to control async-profiler programmatically from Java, add the published library as a dependency. It is available on Maven Central under the `tools.profiler:async-profiler` coordinates.
+
+<CodeGroup>
+
+```xml Maven (pom.xml)
+<dependency>
+    <groupId>tools.profiler</groupId>
+    <artifactId>async-profiler</artifactId>
+    <version>4.3</version>
+</dependency>
+```
+
+```groovy Gradle (build.gradle)
+implementation 'tools.profiler:async-profiler:4.3'
+```
+
+</CodeGroup>
+
+See [Java API](/integration/java-api) for usage details.
+
+## Configure Linux kernel parameters
+
+On Linux 4.6 and later, capturing kernel call stacks from a non-root process requires two kernel parameters to be set. Run these as root before profiling:
+
+```bash
+sysctl kernel.perf_event_paranoid=1
+sysctl kernel.kptr_restrict=0
+```
+
+To make these settings permanent across reboots, add them to `/etc/sysctl.conf`:
+
+```
+kernel.perf_event_paranoid=1
+kernel.kptr_restrict=0
+```
+
+<Warning>
+Without `kernel.perf_event_paranoid=1`, async-profiler falls back to a timer-based sampling engine that cannot capture kernel frames. Without `kernel.kptr_restrict=0`, kernel symbols will not be resolved in stack traces.
+</Warning>
+
+## Recommended JVM flags
+
+For better profiling accuracy, start the target JVM with:
+
+```bash
+java -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints ...
+```
+
+These flags instruct HotSpot to generate debug information for JIT-compiled methods at all program counter locations, not just at safepoints. This is not required when async-profiler is loaded at JVM startup (via `-agentpath:`), because it enables the flags automatically in that case.
+
+## Build from source
+
+### Minimum requirements
+
+- `make`
+- GCC 7.5.0+ or Clang 7.0.0+
+- Static version of `libstdc++` (for example, on Amazon Linux 2023: `yum install libstdc++-static`)
+- JDK 11+
+
+### Build steps
+
+<Steps>
+  <Step title="Install build dependencies">
+    Make sure `gcc`, `g++`, and `java` are available on your `PATH`. Set `JAVA_HOME` to your JDK installation if it is not automatically detected.
+
+    ```bash
+    export JAVA_HOME=/path/to/jdk
+    export PATH="$JAVA_HOME/bin:$PATH"
+    ```
+  </Step>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/async-profiler/async-profiler.git
+    cd async-profiler
+    ```
+  </Step>
+  <Step title="Build">
+    ```bash
+    make
+    ```
+
+    The profiler launcher is placed at `build/bin/asprof` and the agent library at `build/lib/libasyncProfiler.so` (or `.dylib` on macOS).
+  </Step>
+  <Step title="Run tests (optional)">
+    ```bash
+    make test
+    ```
+
+    This runs both unit tests (C++) and integration tests (Java).
+  </Step>
+  <Step title="Package a release archive (optional)">
+    ```bash
+    make release
+    ```
+
+    Produces a `.tar.gz` on Linux or `.zip` on macOS in the repository root.
+  </Step>
+</Steps>
+
+## Nightly builds
+
+The [nightly release](https://github.com/async-profiler/async-profiler/releases/tag/nightly) always corresponds to the latest successful commit on `main`. Older nightly artifacts from the past 30 days are available in [GitHub Actions](https://github.com/async-profiler/async-profiler/actions/workflows/test-and-publish-nightly.yml) under the artifacts section of each build.

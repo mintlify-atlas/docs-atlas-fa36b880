@@ -1,0 +1,156 @@
+---
+title: "Continuous profiling"
+description: "Capture rolling JFR profiles with --loop for proactive performance monitoring and regression detection across deployments."
+---
+
+Continuous profiling keeps async-profiler running indefinitely, writing periodic snapshots of your application's performance. This gives you a historical record you can compare across time and across application versions — without needing to be present when a performance problem occurs.
+
+## Why continuous profiling
+
+Point-in-time profiling requires you to know a problem is happening before you start the profiler. Continuous profiling turns this around: profiles are always being collected, so when a regression is reported you already have data from before and after the change.
+
+Common use cases:
+
+- **Regression detection** — compare profiles from before and after a deployment to identify which code paths slowed down.
+- **Proactive monitoring** — catch gradual performance degradations before they affect users.
+- **Postmortem analysis** — investigate incidents using profiles captured during the event rather than reproducing them.
+
+## The `--loop` option
+
+The `--loop TIME` option tells async-profiler to restart profiling automatically after each interval, writing a new file each time. The argument is either a clock time (`hh:mm:ss`) or a duration with a unit suffix: `s` (seconds), `m` (minutes), `h` (hours), or `d` (days).
+
+```bash
+# Write a new JFR file every hour
+asprof --loop 1h -f /var/log/profile-%t.jfr 8983
+```
+
+<Warning>
+  Always include a timestamp pattern in the filename when using `--loop`. Without `%t` (or another variable pattern), each iteration overwrites the previous file and you lose history.
+</Warning>
+
+### Filename patterns
+
+| Pattern | Expands to |
+|---|---|
+| `%t` | Unix timestamp at the time the file is written |
+| `%p` | PID of the target JVM |
+| `%n{MAX}` | Sequence number (wraps at MAX) |
+| `%{ENV}` | Value of the named environment variable |
+
+Example with a sequence number that wraps after 24 files:
+
+```bash
+asprof --loop 1h -f /var/log/profile-%n{24}.jfr 8983
+```
+
+## Agent mode for continuous profiling
+
+For server processes that start automatically, embed continuous profiling directly in the JVM startup command. This ensures profiling begins when the application starts with no manual intervention:
+
+```bash
+java -agentpath:/path/to/libasyncProfiler.so=start,event=cpu,loop=1h,file=/var/log/profile-%t.jfr \
+  -jar myapp.jar
+```
+
+The profiler starts with the JVM and keeps running for the lifetime of the process, writing a new file every hour.
+
+## Choosing events for continuous profiling
+
+### Single-event profiling
+
+For most production continuous profiling scenarios, pick a single event type with an appropriate threshold. This keeps overhead predictable and the output focused:
+
+```bash
+# CPU profiling — good baseline for most applications
+asprof --loop 1h -f /var/log/cpu-%t.jfr 8983
+
+# Allocation profiling with a 2 MB threshold
+asprof --loop 1h --alloc 2m -f /var/log/alloc-%t.jfr 8983
+
+# Lock contention with a 10ms threshold
+asprof --loop 1h --lock 10ms -f /var/log/lock-%t.jfr 8983
+```
+
+### Multi-event JFR profiling
+
+JFR output supports recording multiple event types simultaneously. Specify a comma-separated list with `-e`, or combine `-e` with `--alloc` and `--lock` thresholds:
+
+```bash
+# CPU + allocations + locks in a single JFR file
+asprof -e cpu,alloc,lock -f profile.jfr 8983
+
+# CPU with explicit thresholds for allocations and locks
+asprof -e cpu --alloc 2m --lock 10ms -f profile.jfr 8983
+```
+
+The JFR recording will contain these event types:
+
+- `jdk.ExecutionSample` — CPU samples
+- `jdk.ObjectAllocationInNewTLAB` — allocation in a new TLAB
+- `jdk.ObjectAllocationOutsideTLAB` — allocation outside TLAB
+- `jdk.JavaMonitorEnter` — Java lock contention
+- `jdk.ThreadPark` — thread parking (used by `java.util.concurrent`)
+
+<Note>
+  Multi-event profiling requires JFR output format (`.jfr`). Flame graph HTML output only supports a single event at a time.
+</Note>
+
+### The `--all` flag
+
+The `--all` flag enables a predefined set of all common profiling events simultaneously: `cpu`, `wall`, `alloc`, `live`, `lock`, `nativelock`, `nativemem`, and `proc`.
+
+```bash
+asprof --all -f profile.jfr 8983
+```
+
+You can override individual thresholds while keeping `--all`:
+
+```bash
+asprof --all --alloc 2m --lock 10ms -f profile.jfr 8983
+```
+
+You can also substitute a different primary event for `cpu`:
+
+```bash
+# Profile cycles instead of cpu, alongside wall, alloc, live, lock, nativemem
+asprof --all -e cycles -f profile.jfr 8983
+```
+
+<Warning>
+  `--all` is not recommended for production continuous profiling. The combined overhead of all event types simultaneously can be significant. Use `--all` in development or test environments where you want a broad overview, and select specific events with appropriate thresholds for production.
+</Warning>
+
+## Comparing profiles for regression detection
+
+After collecting a history of JFR files, use `jfrconv` to convert them to flame graphs and compare them visually or with diff flame graphs:
+
+<Tabs>
+  <Tab title="Single profile">
+    ```bash
+    jfrconv profile-before.jfr before.html
+    jfrconv profile-after.jfr after.html
+    ```
+
+    Open both flame graphs and use the built-in search to find frames that appear or grew in the "after" profile.
+  </Tab>
+  <Tab title="Differential flame graph">
+    ```bash
+    jfrconv --diff profile-before.jfr profile-after.jfr diff.html
+    ```
+
+    Frames that grew are shown in red; frames that shrank are shown in blue. This highlights exactly where the regression occurred.
+  </Tab>
+</Tabs>
+
+<Tip>
+  Automate the conversion step with a cron job or systemd timer so flame graphs are always available for the latest profiles without manual processing.
+</Tip>
+
+<CardGroup cols={2}>
+  <Card title="CPU profiling" icon="microchip" href="/profiling-modes/cpu">
+    Understand CPU sampling engines and hardware PMU events.
+  </Card>
+  <Card title="Output formats" icon="file-export" href="/output/formats">
+    JFR, flame graph, collapsed, and other output formats.
+  </Card>
+</CardGroup>

@@ -1,0 +1,145 @@
+---
+title: "Native memory profiling"
+description: "Track malloc, realloc, calloc, and free calls to detect native memory leaks in Java and C/C++ applications."
+---
+
+The `nativemem` profiling mode records native heap allocations and deallocations to identify memory that is allocated but never freed. It works for Java applications that call into native code as well as for standalone C/C++ applications.
+
+## How it works
+
+async-profiler intercepts four native memory functions:
+
+- `malloc` — allocate a block of memory
+- `realloc` — resize an existing allocation
+- `calloc` — allocate and zero-initialize memory
+- `free` — release an allocation
+
+Each allocation is recorded with its address and size. When `free` is called for a matching address, the allocation is marked as released. After profiling stops, you can analyze the data to find allocations with no matching `free` — the likely source of native memory leaks.
+
+<Note>
+  The overhead of `nativemem` profiling depends on the frequency of native allocations in your application, but is generally low enough for production use. To reduce overhead further, set a sampling interval with `--nativemem N`.
+</Note>
+
+## Profiling workflow
+
+<Steps>
+  <Step title="Start profiling">
+    Attach async-profiler to your running Java process and begin recording native memory events:
+
+    ```bash
+    asprof start -e nativemem -f app.jfr <PID>
+    ```
+
+    To limit overhead, specify a sampling interval. For example, take at most one sample per megabyte allocated:
+
+    ```bash
+    asprof start --nativemem 1m -f app.jfr <PID>
+    ```
+
+    If you are not interested in tracking frees (and want to skip leak analysis), use `--nofree` to avoid recording `free` calls:
+
+    ```bash
+    asprof start --nativemem 1m --nofree -f app.jfr <PID>
+    ```
+  </Step>
+  <Step title="Let the application run">
+    Allow the application to run under its normal workload for as long as needed — minutes to hours depending on how quickly leaks manifest.
+  </Step>
+  <Step title="Stop profiling">
+    Stop the profiler and flush the JFR recording:
+
+    ```bash
+    asprof stop <PID>
+    ```
+  </Step>
+  <Step title="Analyze for leaks">
+    Use `jfrconv` to process the JFR file and generate a flame graph showing only unfreed allocations:
+
+    ```bash
+    jfrconv --total --nativemem --leak app.jfr app-leak.html
+    ```
+
+    To see all native allocations without leak filtering:
+
+    ```bash
+    jfrconv --total --nativemem app.jfr app-malloc.html
+    ```
+  </Step>
+</Steps>
+
+## The `--leak` flag
+
+When `--leak` is passed to `jfrconv`, the flame graph shows only allocations that had no matching `free` call by the end of the profiling session. This focuses attention on memory that was not returned to the OS — the most likely candidates for a leak.
+
+### Tail allocation bias
+
+To avoid bias toward recent allocations that simply haven't been freed yet (not true leaks), the leak profiler ignores allocations made in the **last 10% of the profiling session** by default.
+
+You can adjust this with `--tail`:
+
+```bash
+# Ignore allocations in the last 20% of the session (ratio)
+jfrconv --nativemem --leak --tail 20% app.jfr app-leak.html
+
+# Ignore allocations in the last 2 minutes of a 10-minute profile
+jfrconv --nativemem --leak --tail 20% app.jfr app-leak.html
+```
+
+The `--tail` argument accepts a ratio (e.g., `0.2`) or a percentage (e.g., `20%`).
+
+## Sampling interval
+
+The `--nativemem N` option sets the sampling interval in bytes. A sample is taken approximately once per `N` bytes allocated:
+
+```bash
+# Sample once per 500 KB allocated
+asprof start --nativemem 500k -f app.jfr <PID>
+
+# Sample once per 1 MB allocated
+asprof start --nativemem 1m -f app.jfr <PID>
+```
+
+Supported unit suffixes: `k` (kilobytes), `m` (megabytes), `g` (gigabytes). Without a unit, the value is in bytes. Use interval `0` (the default) to sample every allocation.
+
+## Skipping free tracking
+
+If you only need to see where allocations come from — and do not need leak analysis — you can skip recording `free` calls. This reduces overhead when the application calls `free` at a high rate:
+
+```bash
+asprof start --nativemem 1m --nofree -f app.jfr <PID>
+```
+
+<Warning>
+  With `--nofree`, the `--leak` flag in `jfrconv` will not work correctly, since there are no free records to match against allocations.
+</Warning>
+
+## Using `LD_PRELOAD` for non-Java applications
+
+`nativemem` mode can also profile native (non-Java) processes using `LD_PRELOAD`. This injects `libasyncProfiler.so` into the target process at startup, intercepting allocation calls before the application begins.
+
+```bash
+LD_PRELOAD=/path/to/libasyncProfiler.so \
+  ASPROF_COMMAND=start,nativemem,total,loop=10m,cstack=dwarf,file=profile-%t.jfr \
+  NativeApp [args]
+```
+
+This command starts the application with profiling enabled, writing a new JFR file every 10 minutes. The `%t` in the filename is replaced with a timestamp to avoid overwriting previous recordings. After profiling, run `jfrconv` to generate a leak report:
+
+```bash
+jfrconv --total --nativemem --leak profile-<timestamp>.jfr profile-leak.html
+```
+
+<Tip>
+  Use `cstack=dwarf` for native applications to get accurate stack unwinding through C/C++ code that does not use frame pointers.
+</Tip>
+
+For complete documentation on profiling non-Java processes, see [Non-Java applications](/integration/non-java).
+
+<CardGroup cols={2}>
+  <Card title="Allocation profiling" icon="memory" href="/profiling-modes/allocation">
+    Track Java heap allocations with TLAB-driven sampling.
+  </Card>
+  <Card title="Non-Java applications" icon="terminal" href="/integration/non-java">
+    Profile C/C++ and other native processes with LD_PRELOAD.
+  </Card>
+</CardGroup>

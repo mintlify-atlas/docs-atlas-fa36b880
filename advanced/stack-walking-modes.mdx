@@ -1,0 +1,106 @@
+---
+title: "Stack Walking Modes"
+description: "How async-profiler reconstructs call stacks and which mode to use for your workload."
+---
+
+Async-profiler supports four native stack walking modes, selected with `--cstack MODE` (or `cstack=MODE` as an agent option). The mode controls how the profiler traverses the C/native portion of a mixed Java+native stack.
+
+## Modes
+
+### Frame pointer (fp)
+
+Frame pointer unwinding traverses frame pointers stored in memory. Each function call maintains a pointer to its caller's stack frame, forming a linked chain that can be walked to reconstruct the call path.
+
+**Characteristics:**
+
+- Very fast with minimal overhead.
+- Requires all native code to be compiled with frame pointers enabled (`-fno-omit-frame-pointer`). Many Linux distributions compile system libraries without frame pointers by default, which can produce incomplete native stacks.
+- Was the default mode before async-profiler 4.2.
+
+```bash
+asprof --cstack fp -f profile.jfr <pid>
+```
+
+### DWARF
+
+DWARF unwinding reconstructs call stacks using unwinding tables embedded in executables (typically in the `.eh_frame` section). It works correctly even when frame pointers have been omitted by the compiler.
+
+**Characteristics:**
+
+- Works with optimized code where frame pointers are absent.
+- Requires extra memory: for example, the lookup table for `libjvm.so` is approximately 2 MB.
+- Slower than frame-pointer unwinding, but still fast enough for on-the-fly use because async-profiler's implementation is signal-safe.
+
+```bash
+asprof --cstack dwarf -f profile.jfr <pid>
+```
+
+<Note>
+DWARF mode is the best choice when native libraries were compiled without frame pointers and you need accurate native stack traces.
+</Note>
+
+### VM structs (vm / vmx)
+
+VM structs mode leverages JVM internal structures to replicate Java stack walking inside async-profiler, without depending on the JVM's own API.
+
+**Why it was introduced — problems with AsyncGetCallTrace (AGCT):**
+
+Async-profiler previously relied on `AsyncGetCallTrace` (AGCT), a non-standard HotSpot extension for collecting Java stack traces outside safepoints. AGCT had persistent reliability problems:
+
+- As a non-API function it received little testing and was broken in several minor JDK updates, e.g. [JDK-8307549](https://bugs.openjdk.org/browse/JDK-8307549).
+- It could not walk Java stacks in various corner cases ([JDK-8178287](https://bugs.openjdk.org/browse/JDK-8178287)).
+- Most critically, AGCT could crash the JVM with no reliable workaround available from outside the JVM.
+
+**Advantages of `vm` mode:**
+
+- Fully enclosed by crash protection using `setjmp`/`longjmp`. If unwinding fails, the profiler recovers rather than crashing the JVM.
+- Shows all frame types throughout the stack: Java frames, native frames, and JVM stubs.
+- Provides additional per-frame metadata, such as JIT compilation type.
+
+**`vmx` (expert mode):**
+
+`--cstack vmx` activates extended VM structs unwinding. It produces mixed stack traces with Java and native frames interleaved, showing native frames that precede Java frames on the stack — frames that `vm` mode does not display.
+
+<Warning>
+`vmx` is an expert option. The interleaved output is more complex to interpret and may include internal JVM frames not relevant to application-level analysis.
+</Warning>
+
+```bash
+# Standard VM structs (default since 4.2)
+asprof --cstack vm -f profile.jfr <pid>
+
+# Expert interleaved mode
+asprof --cstack vmx -f profile.jfr <pid>
+```
+
+The maximum stack depth for `vm` and `vmx` is controlled with `-j depth`:
+
+```bash
+asprof --cstack vm -j 512 -f profile.jfr <pid>
+```
+
+### Disabled (no)
+
+Skips native stack collection entirely. Only Java frames are collected.
+
+```bash
+asprof --cstack no -f profile.jfr <pid>
+```
+
+## Choosing a mode
+
+| Scenario | Recommended mode |
+| --- | --- |
+| HotSpot JVM on Linux (most cases) | `vm` (default since 4.2) |
+| Optimized native libraries without frame pointers | `dwarf` |
+| Native code compiled with frame pointers (`-fno-omit-frame-pointer`) | `fp` |
+| Want to see native frames preceding Java frames | `vmx` |
+| Java-only analysis, native overhead unwanted | `no` |
+
+<Note>
+`vm` and `vmx` require a HotSpot JVM that exports `gHotSpotVMStructs` symbols. On non-HotSpot JVMs, async-profiler will report an error and fall back automatically.
+</Note>
+
+<Tip>
+By default, native stack collection is active for `cpu`, `ctimer`, wall-clock, and `perf-events` profiling modes. Java-level events such as `alloc` and `lock` collect only the Java stack regardless of `--cstack`.
+</Tip>

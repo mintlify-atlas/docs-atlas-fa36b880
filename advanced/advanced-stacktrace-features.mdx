@@ -1,0 +1,92 @@
+---
+title: "Advanced Stacktrace Features"
+description: "Use -F flags to reveal JIT compilation tasks, virtual call targets, and instruction addresses in profiles."
+---
+
+The `-F` flag (or `features=` agent option) enables optional stack-walking enhancements that add extra diagnostic frames to collected stack traces. Multiple features can be combined with commas (`-F comptask,vtable`) or `+` when using the agent string (`features=comptask+vtable`).
+
+## comptask — JIT compilation tasks
+
+JIT compiler threads consume CPU just like application threads, and async-profiler samples them the same way. However, not all Java methods cost the same amount to compile: some trigger expensive C2 optimizations, and in rare cases a C2 bug can cause a compiler thread to spin at 100% CPU indefinitely.
+
+By default, a compiler thread's stack trace shows only the internal JVM compilation machinery. The `comptask` feature adds an extra synthetic frame identifying the Java method currently being compiled, making it visible which methods are driving JIT overhead.
+
+**When to use it:**
+
+- JIT compiler threads appear prominently in a CPU profile.
+- You suspect a specific method is triggering excessive or runaway compilation.
+- You are diagnosing C2 compiler bugs.
+
+**Enabling:**
+
+```bash
+# asprof
+asprof -F comptask -f profile.jfr <pid>
+
+# Agent
+java -agentpath:/path/to/libasyncProfiler.so=start,event=cpu,features=comptask,file=profile.jfr MyApp
+```
+
+**Output:** the flame graph or call tree shows a frame like `[Compiling] com.example.HotClass.hotMethod(...)` at the top of compiler thread stacks, indicating what is being compiled at each sample point.
+
+## vtable — megamorphic virtual call targets
+
+In polymorphic Java code, the JVM dispatches virtual and interface method calls through vtable and itable stubs. When a call site has many different receiver types (megamorphic), these stubs can account for a measurable fraction of CPU time. By default, async-profiler shows only the stub frame (`vtable stub` or `itable stub`), which does not reveal which concrete types are being dispatched.
+
+The `vtable` feature adds a synthetic frame on top of each vtable/itable stub frame showing the actual runtime type of the receiver object. This lets you see the proportion of different receiver types for each call site.
+
+**When to use it:**
+
+- A significant portion of CPU is spent in vtable or itable stubs.
+- You want to understand which concrete implementations dominate a polymorphic call site.
+- You are considering devirtualization or call-site refactoring.
+
+**Enabling:**
+
+```bash
+# asprof
+asprof -F vtable -f profile.jfr <pid>
+
+# Agent
+java -agentpath:/path/to/libasyncProfiler.so=start,event=cpu,features=vtable,file=profile.jfr MyApp
+```
+
+**Output:** the frame above a `vtable stub` entry shows the receiver class, e.g. `com.example.ConcreteImpl`. The relative width of each receiver type frame indicates its share of dispatch traffic at that call site.
+
+## pcaddr — instruction address recording
+
+For low-level hotspot analysis, it is sometimes necessary to know not just which method is hot, but exactly which instruction within a method is consuming CPU. As an intermediate step toward instruction-level profiling, `pcaddr` records the program counter (PC) address of the currently executing instruction for each sample.
+
+Each stack trace receives a synthetic frame at the top containing the raw instruction address. You can cross-reference these addresses against disassembly output (e.g. from `-XX:+PrintAssembly`) to pinpoint hot instructions.
+
+**When to use it:**
+
+- A method appears hot but you need to identify the specific instruction or code path within it.
+- You are doing low-level CPU microarchitecture analysis (cache misses, branch mispredictions, etc.).
+- You are working with JIT-compiled code and want to correlate samples with assembly output.
+
+**Enabling:**
+
+```bash
+# asprof
+asprof -F pcaddr -f profile.jfr <pid>
+
+# Agent
+java -agentpath:/path/to/libasyncProfiler.so=start,event=cpu,features=pcaddr,file=profile.jfr MyApp
+```
+
+**Output:** each stack trace includes a top frame like `0x00007f3a1c2b4d80` (a hex address). Match this address against disassembly to find the hot instruction.
+
+<Tip>
+`pcaddr` is most useful when combined with JIT disassembly output. Enable `-XX:+UnlockDiagnosticVMOptions -XX:+PrintAssembly` to get the compiled method assembly and map PC addresses to specific instructions.
+</Tip>
+
+## Combining features
+
+All three features can be enabled together:
+
+```bash
+asprof -F comptask,vtable,pcaddr -f profile.jfr <pid>
+```
+
+When combining, each feature adds its own synthetic frame, so stack traces become taller. Use only the features relevant to the current investigation to keep output readable.

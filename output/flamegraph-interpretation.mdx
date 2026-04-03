@@ -1,0 +1,125 @@
+---
+title: "Flame graph interpretation"
+description: "Learn how async-profiler flame graphs are constructed from sampling data, how to read frame widths and colors, and how to identify performance bottlenecks."
+---
+
+A flame graph is a visualization of aggregated call stack samples. Understanding how it is built makes it much easier to interpret correctly.
+
+## How a flame graph is built
+
+### Step 1: sampling
+
+async-profiler interrupts the running JVM at a fixed rate and records the current call stack for each thread. The diagram below shows unsorted raw samples before any aggregation:
+
+- `func3() → func7()`: 3 samples
+- `func4()`: 1 sample
+- `func1() → func5()`: 2 samples
+- `func2() → func8()`: 4 samples
+- `func2() → func6()`: 1 sample
+
+### Step 2: sorting
+
+Samples are sorted alphabetically at each level of the call stack, starting from just below the root frame.
+
+<Note>
+The X-axis in a flame graph is **not a timeline**. The horizontal position of a frame only reflects alphabetical ordering. The graph shows _how often_ a stack trace was observed, not _when_ it occurred.
+</Note>
+
+### Step 3: aggregation
+
+Frames for the same method at the same stack depth are merged (stitched together) into a single block. The width of that block is proportional to the number of samples in which the frame appeared.
+
+---
+
+## Reading a flame graph
+
+### X-axis: width = frequency
+
+The wider a frame, the more often it appeared across all captured samples. A frame that spans half the graph's width was present in roughly half of all samples.
+
+### Y-axis: call stack depth
+
+Frames higher up the Y-axis are callees of frames below them. The bottom of the graph is the root of the call stack (typically `main` or a thread entry point), and the top frames are the leaf methods where the CPU or other resource was actually consumed.
+
+### Finding bottlenecks
+
+Look for **wide frames near the top** of the graph — these are the leaf methods consuming the most resources. In the example above:
+
+- `func8()` is the widest top-level frame (4 samples) and the most likely candidate for optimization.
+- `func7()` and `func5()` appear above their respective callers but are narrower.
+- `func4()` has only 1 sample and appears at the top _and_ the bottom, meaning it does its own work without calling deeper functions.
+- `func6()` with 1 sample sits between `func2()` and `func8()` in the call chain.
+
+In a real profile, focus on top frames with the greatest horizontal span under a call path you own or can influence.
+
+---
+
+## Color coding
+
+async-profiler uses color to encode the type of each frame:
+
+| Color | Frame type |
+|---|---|
+| Green | Java methods |
+| Yellow | Native code and JVM internals |
+| Orange / red | Kernel frames |
+
+Color intensity within the green palette additionally reflects the JIT compilation tier: a brighter green typically indicates a more highly optimized (C2-compiled) frame, while a duller shade may indicate interpreted or C1-compiled code.
+
+---
+
+## Interactive features
+
+async-profiler flame graphs are self-contained HTML files with built-in interactivity:
+
+- **Click a frame** to zoom in and fill the viewport with that frame's subtree. Click the top bar or press Escape to zoom back out.
+- **Ctrl+F** opens a search box. Matching frames are highlighted across the entire graph, and the status bar shows the percentage of samples that match.
+- **Invert button** toggles between a standard flame graph (callees above callers) and an icicle graph (callers above callees), which can make it easier to identify callers of a hot method.
+
+---
+
+## `--reverse` and `--inverted` options
+
+These two options are orthogonal and can be combined:
+
+| Flag | Effect |
+|---|---|
+| `--reverse` | Reverses the order of each stack trace before rendering (icicle layout by default) |
+| `--inverted` | Flips the visual layout: icicle becomes flame graph, flame graph becomes icicle |
+
+Use `--reverse` when you want to see which callers are responsible for a specific callee — it groups stack traces by their leaf frames at the base of the graph. Use `--inverted` to change the visual orientation of the resulting layout.
+
+<Tip>
+`--reverse` without `--inverted` produces an icicle graph (root at top, leaves at bottom). Adding `--inverted` flips it back to the traditional flame shape with reversed stacks.
+</Tip>
+
+---
+
+## Profiling modes
+
+CPU utilization is the most common use case for flame graphs, but the same visualization applies to other profiling modes:
+
+- **Allocation profiling**: frame width represents heap bytes allocated, not CPU samples.
+- **Wall-clock profiling**: frame width represents elapsed time, including time spent waiting on I/O or locks.
+- **Lock contention**: frame width represents time spent blocked on a monitor.
+
+See [Profiling modes](/profiling-modes/cpu) for details on each mode.
+
+---
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="Output formats" icon="file-export" href="/output/formats">
+    All formats async-profiler can write, including flamegraph and collapsed.
+  </Card>
+  <Card title="Heatmap" icon="table-cells" href="/output/heatmap">
+    Timeline-based visualization for transient anomalies that flame graphs miss.
+  </Card>
+  <Card title="Converter usage" icon="arrows-rotate" href="/output/converter-usage">
+    Generate differential flame graphs and convert between formats with `jfrconv`.
+  </Card>
+  <Card title="JFR visualization" icon="magnifying-glass-chart" href="/output/jfr-visualization">
+    View flame graphs inside JMC or IntelliJ IDEA from a JFR recording.
+  </Card>
+</CardGroup>

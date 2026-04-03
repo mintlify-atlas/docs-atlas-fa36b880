@@ -1,80 +1,125 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Profile a running Java application and view the results as a flamegraph in under five minutes."
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
+- A running Java application you want to profile
+- async-profiler installed — see [Installation](/installation)
+- On Linux: `kernel.perf_event_paranoid=1` and `kernel.kptr_restrict=0` set (see [Installation](/installation#configure-linux-kernel-parameters))
 
-### Step 1: Set up your local environment
+## Profile your application
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
+  <Step title="Find the process ID">
+    Use `jps` to list running Java processes:
 
-### Step 2: Deploy your changes
+    ```bash
+    jps
+    ```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    Example output:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    ```
+    9234 Jps
+    8983 Computey
+    ```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    Alternatively, use `pgrep` to search by name:
 
-### Step 3: Go live
+    ```bash
+    pgrep -a java
+    ```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    Note the PID of the application you want to profile — `8983` in the example above.
+  </Step>
+  <Step title="Run the profiler">
+    Profile the application for 30 seconds and save the result as an interactive flamegraph:
+
+    ```bash
+    asprof -d 30 -f flamegraph.html <PID>
+    ```
+
+    Replace `<PID>` with the process ID from the previous step.
+
+    <Tip>
+      If only one Java process is running on the system, you can use the `jps` keyword instead of a numeric PID:
+
+      ```bash
+      asprof -d 30 -f flamegraph.html jps
+      ```
+
+      You can also use the application name as it appears in `jps` output (for example, `Computey`).
+    </Tip>
+  </Step>
+  <Step title="View the flamegraph">
+    Open `flamegraph.html` in any browser. The flamegraph shows the call stacks sampled during profiling — wider frames indicate more CPU time spent in that method or its callees.
+
+    To save results in text format instead, omit `-f` or use a `.txt` extension:
+
+    ```bash
+    asprof -d 30 <PID>
+    ```
+
+    Text output looks like this:
+
+    ```
+    --- Execution profile ---
+    Total samples:           687
+    Unknown (native):        1 (0.15%)
+
+    --- 6790000000 (98.84%) ns, 679 samples
+      [ 0] Primes.isPrime
+      [ 1] Primes.primesThread
+      [ 2] Primes.access$000
+      [ 3] Primes$1.run
+      [ 4] java.lang.Thread.run
+
+              ns  percent  samples  top
+      ----------  -------  -------  ---
+      6790000000   98.84%      679  Primes.isPrime
+        40000000    0.58%        4  __do_softirq
+    ```
+
+    This output shows that `Primes.isPrime` is the hottest method, consuming 98.84% of sampled CPU time, called from the `Primes.primesThread` call stack. The `__do_softirq` frame is a kernel frame — visible because async-profiler captures the full stack including native and kernel frames.
+  </Step>
+  <Step title="Start and stop separately (optional)">
+    For more control, you can attach the profiler and detach it independently instead of using a fixed duration:
+
+    ```bash
+    asprof start <PID>
+    # ... exercise your performance scenario ...
+    asprof stop <PID>
+    ```
+
+    Output and profiling results are printed to the console where you ran `asprof stop`.
+  </Step>
+</Steps>
+
+## Common options
+
+| Option | Description |
+|---|---|
+| `-d <seconds>` | Profile for a fixed duration |
+| `-f <file>` | Save output to a file (`.html` for flamegraph, `.jfr` for JFR) |
+| `-e <event>` | Profiling event: `cpu` (default), `alloc`, `lock`, `wall`, etc. |
+| `-i <interval>` | Sampling interval (default: `10ms` for CPU profiling) |
+| `--title <text>` | Set the flamegraph title |
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Allocation profiling" icon="memory" href="/profiling-modes/allocation">
+    Find allocation hotspots in the Java heap by profiling with `-e alloc`.
+  </Card>
+  <Card title="Lock profiling" icon="lock" href="/profiling-modes/wall-clock-and-lock">
+    Measure time threads spend contending on monitors with `-e lock`.
+  </Card>
+  <Card title="Continuous profiling" icon="clock" href="/profiling-modes/continuous-profiling">
+    Run async-profiler in a loop to capture always-on profiling data.
+  </Card>
+  <Card title="Agent mode" icon="plug" href="/integration/agent">
+    Attach async-profiler at JVM startup using `-agentpath:` for profiling from the first instruction.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

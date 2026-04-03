@@ -1,0 +1,60 @@
+---
+title: "Introduction"
+description: "async-profiler is a low-overhead sampling profiler for Java that eliminates safepoint bias and reveals native and kernel frames."
+---
+
+async-profiler is a low-overhead sampling profiler for Java applications running on HotSpot-based JVMs (OpenJDK and compatible runtimes). It combines Linux `perf_events`, the `AsyncGetCallTrace` API, and HotSpot-specific APIs to collect accurate stack traces without the safepoint bias that affects most traditional Java profilers.
+
+## How it works
+
+Most Java profilers collect samples only at safepoints — moments when the JVM pauses all threads for garbage collection or other operations. This means they systematically miss code that runs between safepoints, producing results that are misleading for performance analysis.
+
+async-profiler avoids this by using `AsyncGetCallTrace`, a HotSpot API that allows stack traces to be collected at any point during execution, not just at safepoints. On Linux, it uses `perf_events` to generate CPU sampling signals at a configurable frequency (default: 100 Hz). On macOS, it uses interval timers (`itimer`) for the same purpose.
+
+Because the profiler operates as a JVMTI agent inside the target process, it can also walk native and kernel frames — giving you the complete picture of what your application is actually doing.
+
+## What makes it different
+
+| Traditional Java profilers | async-profiler |
+|---|---|
+| Sample only at safepoints | Sample at any point in execution |
+| Miss JIT-compiled hot paths | Capture JIT-compiled and interpreted frames |
+| Java frames only | Java, native, and kernel frames |
+| Require `-XX:+PreserveFramePointer` for native frames | Works without `-XX:+PreserveFramePointer` |
+| Cannot see GC or JIT compiler threads | Profiles GC, JIT, and other non-Java threads |
+
+## What you can profile
+
+- **CPU time** — find which methods consume the most CPU
+- **Heap allocations** — identify allocation hotspots in the Java heap
+- **Native memory allocations and leaks** — track `malloc`/`free` calls in native code
+- **Lock contention** — measure time threads spend waiting on monitors
+- **Hardware and software performance counters** — cache misses, page faults, context switches, and other perf events
+
+## Supported platforms
+
+|           | Officially maintained builds | Community ports                           |
+| --------- | ---------------------------- | ----------------------------------------- |
+| **Linux** | x64, arm64                   | x86, arm32, ppc64le, riscv64, loongarch64 |
+| **macOS** | x64, arm64                   |                                           |
+
+<Note>
+For better profiling accuracy, start your JVM with `-XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints` unless you attach async-profiler at JVM startup. Without these flags, HotSpot may not generate debug information for compiled methods at all program counters, which can produce less precise results.
+</Note>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Profile your first Java application in under five minutes.
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Download a release, build from source, or add the Java API as a dependency.
+  </Card>
+  <Card title="Profiling modes" icon="chart-bar" href="/profiling-modes/cpu">
+    Explore CPU, allocation, lock, native memory, and continuous profiling.
+  </Card>
+  <Card title="Integration" icon="plug" href="/integration/agent">
+    Attach async-profiler as a JVM agent, use the Java API, or integrate with IntelliJ IDEA.
+  </Card>
+</CardGroup>
